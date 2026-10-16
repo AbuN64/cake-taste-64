@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cake-taste-64"
+version = "0.1.0"
+description = "Bounded N64 experiments and native-output evidence using Cake Unbake and Recipe Maker"
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.13"
+dependencies = [
+  "unbake @ git+https://github.com/AbuN64/cake-unbake-64@4afa1f3ef1ec95182c6a22f9b9134563270992d8",
+  "recipemaker @ git+https://github.com/AbuN64/recipe-maker-64@980c34c5ae6a8eca984ff131183a0287a7b07de0",
+]
+
+[project.optional-dependencies]
+dev = ["ruff==0.16.9"]
+
+[project.scripts]
+taste = "cake_taste.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["cake_taste", "cake_taste.*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
