@@ -69,3 +69,5 @@ ruff check src/cake_taste tests
 Core tests use mocked dependency processes and small temporary profiles. Those tests do not establish gameplay, rendering, streaming or recompilation correctness. Real integration receipts must identify inputs, exact revisions, public commands, outputs and remaining gaps. Only the receiving source owner lands changes; tools do not commit or alter unrelated lanes.
 
 The core uses a profile byte digest and verified dependency commits for durable identity, isolates process imports and runtime namespaces, and keeps project facts out of generic code. Completion signals replace polling; timeouts and schema failures are explicit. Stages report measured command duration. There is one CLI and no retired compatibility route. Domain-specific output behavior and resource limits remain the domain owner's proof obligation.
+
+Asset ledger dashboards: `taste catalog render` validates a project ledger and publishes a searchable metadata snapshot. See [catalog contract](src/cake_taste/catalog/README.md).

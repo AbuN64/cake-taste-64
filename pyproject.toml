@@ -30,3 +30,6 @@ target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.setuptools.package-data]
+"cake_taste.catalog" = ["page.html"]

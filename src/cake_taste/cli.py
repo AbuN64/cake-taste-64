@@ -17,7 +17,7 @@ from cake_taste import TasteError
 from cake_taste.config import Profile, load_profile
 from cake_taste.dependencies import invoke, verify_dependencies
 
-DOMAINS = ("build", "media", "panes", "stream", "logs", "repro")
+DOMAINS = ("build", "media", "panes", "stream", "logs", "repro", "catalog")
 
 
 class _Parser(argparse.ArgumentParser):
