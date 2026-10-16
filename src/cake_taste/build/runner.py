@@ -11,8 +11,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .release import prepare, promote
-from .snapshot import sync_snapshot
-from .util import BuildFailure, atomic_json, digest_file, expand, run_gate
+from .snapshot import sync_snapshot, verify_snapshot
+from .util import BuildFailure, atomic_json, digest_file, expand, run_gate, validate_identifiers
 
 
 def now():
@@ -32,10 +32,13 @@ class Runner:
         self.config = profile.section("build")
         if not self.config.get("sources") or not self.config.get("commands"):
             raise ValueError("build.sources and build.commands are required")
+        validate_identifiers(self.config)
+        self.profile_hash = profile.digest
+        if digest_file(Path(profile.source_file)) != self.profile_hash:
+            raise BuildFailure("Loaded project profile bytes changed before build setup")
         workspace_value = self.config.get("workspace", str(Path(profile.runtime_root) / "build"))
         self.workspace = profile.resolve_path(workspace_value)
         self.workspace.mkdir(parents=True, exist_ok=True)
-        self.profile_hash = digest_file(Path(profile.source_file))
 
     def path(self, value, variables=None):
         return self.profile.resolve_path(expand(value, variables or {}))
@@ -57,7 +60,7 @@ class Runner:
         }
         atomic_json(self.workspace / "status.json", value)
 
-    def pin_sources(self, record, variables):
+    def pin_sources(self, record, variables, run_dir):
         pinned = {}
         for spec in self.config["sources"]:
             name = spec["name"]
@@ -68,7 +71,22 @@ class Runner:
             tree = git(repo, "rev-parse", f"{commit}^{{tree}}")
             source = self.workspace / "sources" / name
             manifest = self.workspace / "manifests" / f"{name}.json"
-            snapshot = sync_snapshot(repo, commit, source, manifest, spec.get("protected_top", []))
+            protected = spec.get("protected_top", [])
+            snapshot = sync_snapshot(repo, commit, source, manifest, protected)
+            synced = json.loads(manifest.read_text())
+            frozen_manifest = run_dir / "manifests" / f"{name}.json"
+            frozen = {
+                "schema": 1,
+                "source": name,
+                "commit": commit,
+                "tree": tree,
+                "archive_sha256": snapshot["archive_sha256"],
+                "files": synced["files"],
+            }
+            atomic_json(frozen_manifest, frozen)
+            frozen_manifest.chmod(0o444)
+            manifest_hash = digest_file(frozen_manifest)
+            verify_snapshot(source, frozen, protected)
             pinned[name] = {
                 "repo": str(repo),
                 "ref": spec["ref"],
@@ -76,8 +94,13 @@ class Runner:
                 "tree": tree,
                 "snapshot": snapshot,
                 "source": str(source),
+                "manifest": str(frozen_manifest),
+                "manifest_sha256": manifest_hash,
+                "protected_top": protected,
             }
             variables[f"source.{name}"] = str(source)
+            variables[f"source.{name}.manifest"] = str(frozen_manifest)
+            variables[f"source.{name}.manifest_sha256"] = manifest_hash
             variables[f"commit.{name}.full"] = commit
             variables[f"commit.{name}.short7"] = commit[:7]
             variables[f"tree.{name}"] = tree
@@ -161,6 +184,21 @@ class Runner:
                 raise BuildFailure(f"Committed source was superseded: {name}")
             if git(repo, "rev-parse", f"{item['commit']}^{{tree}}") != item["tree"]:
                 raise BuildFailure(f"Committed tree changed: {name}")
+            manifest = Path(item["manifest"])
+            if digest_file(manifest) != item["manifest_sha256"]:
+                raise BuildFailure(f"Frozen source manifest changed: {name}")
+            frozen = json.loads(manifest.read_text())
+            if (frozen.get("schema"), frozen.get("commit"), frozen.get("tree"), frozen.get("archive_sha256")) != (
+                1,
+                item["commit"],
+                item["tree"],
+                item["snapshot"]["archive_sha256"],
+            ):
+                raise BuildFailure(f"Frozen source identity changed: {name}")
+            try:
+                verify_snapshot(Path(item["source"]), frozen, item["protected_top"])
+            except ValueError as error:
+                raise BuildFailure(f"Frozen source changed: {name}: {error}") from error
         for name, item in record.get("inputs", {}).items():
             alias = Path(item["source_alias"])
             self_switched = any(alias.is_relative_to(Path(root) / "current") for root in switched_roots)
@@ -219,7 +257,7 @@ class Runner:
         }
         self.status(record, "running")
         try:
-            self.pin_sources(record, variables)
+            self.pin_sources(record, variables, run_dir)
             self.freeze_inputs(record, variables, run_dir)
             self.verify_checks("pre", variables)
             for spec in self.config["commands"]:

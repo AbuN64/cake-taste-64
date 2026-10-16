@@ -11,6 +11,42 @@ import time
 from pathlib import Path, PurePosixPath
 
 
+def verify_snapshot(source_root, manifest, protected_top=()):
+    """Reject changes to archived files and unowned files outside build roots."""
+    root = Path(source_root)
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError(f"Snapshot source root is missing or a symlink: {root}")
+    for name in protected_top:
+        if not name or name in (".", "..", ".git") or "/" in name or "\\" in name:
+            raise ValueError(f"Invalid protected snapshot root: {name!r}")
+        protected = root / name
+        if protected.exists() and (protected.is_symlink() or not protected.is_dir()):
+            raise ValueError(f"Protected snapshot root is not a directory: {protected}")
+    expected = manifest["files"]
+    seen = set()
+    for directory, dirs, names in os.walk(root, followlinks=False):
+        parent = Path(directory)
+        relative_parent = parent.relative_to(root)
+        if relative_parent == Path("."):
+            dirs[:] = [name for name in dirs if name not in protected_top]
+        for name in dirs:
+            path = parent / name
+            if path.is_symlink():
+                raise ValueError(f"Snapshot contains an unexpected symlink: {path}")
+        for name in names:
+            path = parent / name
+            relative = path.relative_to(root).as_posix()
+            if path.is_symlink() or not path.is_file() or relative not in expected:
+                raise ValueError(f"Snapshot contains an unexpected file or symlink: {path}")
+            item = expected[relative]
+            if file_sha256(path) != item["sha256"] or (path.stat().st_mode & 0o777) != item["mode"]:
+                raise ValueError(f"Snapshot content or mode differs from committed archive: {path}")
+            seen.add(relative)
+    missing = set(expected) - seen
+    if missing:
+        raise ValueError(f"Snapshot is missing committed files: {sorted(missing)}")
+
+
 def sha256(data):
     return hashlib.sha256(data).hexdigest()
 

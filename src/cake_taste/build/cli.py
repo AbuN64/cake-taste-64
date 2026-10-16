@@ -7,6 +7,7 @@ import json
 from cake_taste import TasteError
 
 from .runner import Runner
+from .util import BuildFailure
 
 
 class Parser(argparse.ArgumentParser):
@@ -29,7 +30,10 @@ def run(profile, argv):
     once.add_argument("--prove-only", action="store_true")
     commands.add_parser("status", add_help=False)
     args = parser.parse_args(argv)
-    runner = Runner(profile)
+    try:
+        runner = Runner(profile)
+    except BuildFailure as error:
+        raise TasteError("build.config", str(error)) from error
     if args.command == "status":
         latest = runner.workspace / "latest.json"
         current = runner.workspace / "status.json"

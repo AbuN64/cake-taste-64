@@ -8,6 +8,8 @@ import unittest
 from pathlib import Path
 
 from cake_taste.build.runner import Runner
+from cake_taste.build.snapshot import verify_snapshot
+from cake_taste.build.util import BuildFailure
 
 
 def git(repo, *args):
@@ -26,8 +28,12 @@ class Profile:
         self.project_root = path.parent / "project"
         self.runtime_root = path.parent / "runtime"
         self.output_root = path.parent / "output"
-        path.write_text(json.dumps(data))
         self.data = data
+        self.save()
+
+    def save(self):
+        self.source_file.write_text(json.dumps(self.data))
+        self.digest = hashlib.sha256(self.source_file.read_bytes()).hexdigest()
 
     def section(self, name):
         return copy.deepcopy(self.data.get(name, {}))
@@ -38,6 +44,29 @@ class Profile:
 
 
 class BuildPipelineTest(unittest.TestCase):
+    def test_path_bearing_identifiers_fail_before_workspace_creation(self):
+        for section in ("sources", "inputs", "checks", "commands", "outputs", "releases"):
+            with self.subTest(section=section), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                build = {"sources": [{"name": "engine"}], "commands": [{"name": "compile"}]}
+                build[section] = [{"name": "../../outside"}]
+                profile = Profile(root / "profile.json", {"build": build})
+                with self.assertRaisesRegex(BuildFailure, f"Unsafe build.{section} identifier"):
+                    Runner(profile)
+                self.assertFalse((root / "runtime").exists())
+                self.assertFalse((root / "outside").exists())
+
+    def test_duplicate_identifiers_fail_before_workspace_creation(self):
+        for section in ("sources", "inputs", "checks", "commands", "outputs", "releases"):
+            with self.subTest(section=section), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                build = {"sources": [{"name": "engine"}], "commands": [{"name": "compile"}]}
+                build[section] = [{"name": "same"}, {"name": "same"}]
+                profile = Profile(root / "profile.json", {"build": build})
+                with self.assertRaisesRegex(BuildFailure, f"Duplicate build.{section} identifier"):
+                    Runner(profile)
+                self.assertFalse((root / "runtime").exists())
+
     def make_profile(self, directory):
         root = Path(directory)
         repositories = {}
@@ -148,12 +177,17 @@ class BuildPipelineTest(unittest.TestCase):
             receipt = json.loads(Path(second["receipt"]).read_text())
             self.assertEqual(receipt["sources"]["adapter"]["commit"], commits["adapter"])
             self.assertEqual(receipt["steps"][1]["returncode"], 1)
+            for name in ("engine", "adapter"):
+                source = receipt["sources"][name]
+                manifest = Path(source["manifest"])
+                self.assertEqual(hashlib.sha256(manifest.read_bytes()).hexdigest(), source["manifest_sha256"])
+                self.assertEqual(json.loads(manifest.read_text())["commit"], commits[name])
 
     def test_failed_gate_never_switches_current(self):
         with tempfile.TemporaryDirectory() as directory:
             profile, _, _ = self.make_profile(directory)
             profile.data["build"]["commands"][0]["argv"] = [sys.executable, "-c", "raise SystemExit(2)"]
-            profile.source_file.write_text(json.dumps(profile.data))
+            profile.save()
             result = Runner(profile).attempt()
             self.assertEqual(result["status"], "failed")
             self.assertFalse((profile.runtime_root / "releases/port/current").exists())
@@ -171,7 +205,7 @@ class BuildPipelineTest(unittest.TestCase):
                 "'user.email=test@example.invalid','commit','-m','newer'],check=True,stdout=subprocess.DEVNULL)"
             )
             profile.data["build"]["commands"].append({"name": "supersede", "argv": [sys.executable, "-c", code]})
-            profile.source_file.write_text(json.dumps(profile.data))
+            profile.save()
             result = Runner(profile).attempt()
             self.assertEqual(result["status"], "failed")
             self.assertNotEqual(git(repo, "rev-parse", "HEAD"), commits["adapter"])
@@ -181,7 +215,7 @@ class BuildPipelineTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             profile, _, _ = self.make_profile(directory)
             profile.data["build"]["releases"][1]["activate"] = [{"argv": [sys.executable, "-c", "raise SystemExit(3)"]}]
-            profile.source_file.write_text(json.dumps(profile.data))
+            profile.save()
             result = Runner(profile).attempt()
             self.assertEqual(result["status"], "failed")
             self.assertFalse((profile.runtime_root / "releases/port/current").exists())
@@ -190,6 +224,61 @@ class BuildPipelineTest(unittest.TestCase):
             self.assertIn(
                 ("activate-experiment-0", 3), [(step["name"], step["returncode"]) for step in receipt["steps"]]
             )
+
+    def test_private_source_mutation_cannot_be_attributed_to_pinned_commit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            profile, _, _ = self.make_profile(directory)
+            code = (
+                "from pathlib import Path; p=Path('${source.engine}/source.c'); "
+                "p.write_text('edited private source\\n'); "
+                "o=Path('${workspace}/compiled'); o.mkdir(exist_ok=True); "
+                "(o/'port').write_bytes(p.read_bytes()); (o/'probe').write_bytes(b'probe')"
+            )
+            profile.data["build"]["commands"][0]["argv"] = [sys.executable, "-c", code]
+            profile.save()
+            result = Runner(profile).attempt(prove_only=True)
+            self.assertEqual(result["status"], "failed")
+            receipt = json.loads(Path(result["receipt"]).read_text())
+            self.assertIn("Frozen source changed: engine", receipt["error"])
+            self.assertFalse((profile.runtime_root / "releases/port/current").exists())
+
+    def test_manifest_rejects_mode_extra_symlink_and_deleted_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            profile, _, _ = self.make_profile(directory)
+            result = Runner(profile).attempt(prove_only=True)
+            self.assertEqual(result["status"], "proved")
+            receipt = json.loads(Path(result["receipt"]).read_text())
+            source = profile.runtime_root / "build/sources/engine"
+            manifest = json.loads(Path(receipt["sources"]["engine"]["manifest"]).read_text())
+            generated = source / "build/object.o"
+            generated.parent.mkdir()
+            generated.write_bytes(b"private build cache")
+            verify_snapshot(source, manifest, ["build"])
+            tracked = source / "source.c"
+            original_mode = tracked.stat().st_mode & 0o777
+            tracked.chmod(0o755 if original_mode != 0o755 else 0o644)
+            with self.assertRaisesRegex(ValueError, "content or mode"):
+                verify_snapshot(source, manifest, ["build"])
+            tracked.chmod(original_mode)
+            extra = source / "unexpected.c"
+            extra.write_text("not archived")
+            with self.assertRaisesRegex(ValueError, "unexpected"):
+                verify_snapshot(source, manifest, ["build"])
+            extra.unlink()
+            extra.symlink_to(tracked)
+            with self.assertRaisesRegex(ValueError, "symlink"):
+                verify_snapshot(source, manifest, ["build"])
+            extra.unlink()
+            tracked.unlink()
+            with self.assertRaisesRegex(ValueError, "missing"):
+                verify_snapshot(source, manifest, ["build"])
+
+    def test_loaded_profile_digest_is_bound_before_build(self):
+        with tempfile.TemporaryDirectory() as directory:
+            profile, _, _ = self.make_profile(directory)
+            profile.source_file.write_bytes(profile.source_file.read_bytes() + b" ")
+            with self.assertRaisesRegex(BuildFailure, "Loaded project profile bytes changed"):
+                Runner(profile)
 
 
 if __name__ == "__main__":

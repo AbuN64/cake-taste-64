@@ -9,6 +9,7 @@ import tempfile
 from pathlib import Path, PurePosixPath
 
 VARIABLE = re.compile(r"\$\{([A-Za-z0-9_.-]+)\}")
+IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 
 
 class BuildFailure(Exception):
@@ -18,6 +19,20 @@ class BuildFailure(Exception):
         super().__init__(message)
         self.step = step
         self.steps = steps or []
+def validate_identifiers(config):
+    """Reject path-bearing names and duplicates before creating a workspace."""
+    for section in ("sources", "inputs", "checks", "commands", "outputs", "releases"):
+        specs = config.get(section, [])
+        if not isinstance(specs, list):
+            raise BuildFailure(f"build.{section} must be an array")
+        seen = set()
+        for spec in specs:
+            name = spec.get("name") if isinstance(spec, dict) else None
+            if not isinstance(name, str) or not IDENTIFIER.fullmatch(name):
+                raise BuildFailure(f"Unsafe build.{section} identifier: {name!r}")
+            if name in seen:
+                raise BuildFailure(f"Duplicate build.{section} identifier: {name}")
+            seen.add(name)
 
 
 def expand(value, variables):

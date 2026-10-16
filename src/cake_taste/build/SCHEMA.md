@@ -9,6 +9,10 @@ Required tables:
 - `sources`: `[{name, repo, ref, protected_top?}]`. Each ref is pinned once,
   archived into `workspace/sources/<name>`, and checked again before release.
   `protected_top` excludes generated roots such as `build` from archive sync.
+  A per-run manifest at `${source.<name>.manifest}` records schema 1, the full
+  commit and tree, archive SHA-256, and every committed file SHA-256/mode. Gates
+  and promotions fail if that manifest or any archived source file changes, is
+  deleted, becomes a symlink, or gains an unowned neighbor outside protected roots.
 - `commands`: ordered `[{name, argv, cwd?, env?, expected_exit_codes?,
   expect_all?, forbid?, timeout_seconds?}]`. `argv` is a real argument array.
   Default exit contract is `[0]`; public fatal gates can explicitly require `[1]`.
@@ -36,6 +40,7 @@ Optional tables:
 String values may contain only known `${...}` variables: `workspace`, `run_dir`,
 `runtime_root`, `output_root`, `project_root`, `source.<name>`,
 `commit.<name>.full`, `commit.<name>.short7`, `tree.<name>`, `input.<name>`,
+`source.<name>.manifest`, `source.<name>.manifest_sha256`,
 `input.<name>.dir`, `input.<name>.sha256`, `output.<name>`, and
 `output.<name>.sha256`. Release activation also gets `release`,
 `release_current`, and `release_revision`. A role revision should bind every
@@ -48,3 +53,5 @@ through the single `logs.events_path` sink when that section is configured.
 Failed or blocked `taste build once` exits nonzero with a named finding and an
 immutable receipt path. Source ref changes during gates are coalesced into the
 latest committed attempt; no writer worktree or timer is polled.
+The receipt records the immutable loaded `Profile.digest`, and a changed profile
+file is rejected before any build work and again before promotion.
