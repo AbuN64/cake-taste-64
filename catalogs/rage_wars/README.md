@@ -1,5 +1,12 @@
 # Rage Wars asset observations
 
+## Primary distinct asset ledger
+
+The primary ledger is distinct-assets.jsonl. It currently has **1,011 confirmed source-identified assets** and **77 observed menu records pending decoder readback**. The confirmed count includes 251 unique bounded Nintendo ADPCM encoded sample spans and 9 compressed libultra sequence payloads. These are encoded payload identities, not 260 audible sounds or decoded playback. Whole-game audio coverage remains unknown.
+
+The audio bank files (2), instrument banks (2), instruments (22), sound definitions (356), wave descriptors (251), logical cue IDs (195), cue variant rows (245) and nested layers (249) are separate control/reference graph units. They are not added to the distinct payload count. Their exact typed metadata, ROM ranges, source identifiers and edges are retained in provenance.json under audio_control_graph_observations, with the source manifest pinned by hash. Sample locations are physical ROM intervals from the sample-data base; control pointers use a separately identified bank-image address space. Sequence track offsets remain relative to their compressed payload, with no invented decoded positions.
+
+
 These are portable notes from the verified **US revision 1** inventory while a catalog feature is unavailable. `assets.jsonl` stores **34,153 observations**, not a count of distinct assets. It contains 24,959 source inventory nodes (including directory and compression containers and decompressed outputs) and 7,687 physical coverage intervals. Those two groups overlap by design. The 2,050 compressed streams are coordinate-space sources, not an asset denominator.
 
 Each range is half-open. `space: "rom"` and `physical_rom_range` identify cartridge bytes. A `:decompressed` space identifies offsets within one decoded stream and has `physical_rom_range: null`. `provenance.json` defines all 2,051 spaces, including the physical ROM. Rows with noncontiguous ROM segments or only a known offset use `range: null` rather than an invented span. Unknown semantic names remain null. Generated labels such as model_11 are retained as `generated_label`, never as verified names; native UI binding labels are marked separately.

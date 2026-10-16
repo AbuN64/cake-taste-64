@@ -1,0 +1,146 @@
+{
+  "audio_scope": {
+    "compressed_music_sequence_payloads": 9,
+    "confirmed_encoded_payload_assets": 260,
+    "decoded_or_listened_samples": 0,
+    "encoded_ADPCM_sample_payloads": 251,
+    "graph_entity_counts_not_summed": {
+      "bank_file_containers": 2,
+      "cue_variant_rows": 245,
+      "instrument_banks": 2,
+      "instruments": 22,
+      "layer_rows": 249,
+      "logical_cue_ids": 195,
+      "sound_definitions": 356,
+      "wave_descriptors": 251
+    },
+    "not_playable_sound_count": true,
+    "whole_game_audio_asset_total": null
+  },
+  "confirmed": {
+    "counts_by_format": {
+      "I4 coverage mask": 167,
+      "Nintendo ADPCM encoded sample": 251,
+      "RGB5551 plus I4 opacity": 131,
+      "RNC1 sprite frame bundle": 69,
+      "libultra compressed sequence": 9,
+      "relative-offset arena bundle": 37,
+      "relative-offset model bundle": 347
+    },
+    "counts_by_type": {
+      "audio_sample": 251,
+      "level": 37,
+      "model": 347,
+      "music_sequence": 9,
+      "sprite_bundle": 69,
+      "texture_image": 298
+    },
+    "distinct_assets": 1011,
+    "named": 37,
+    "unnamed": 974
+  },
+  "counts_by_format_identified_total": {
+    "I4 coverage mask": 167,
+    "Nintendo ADPCM encoded sample": 251,
+    "RGB5551 plus I4 opacity": 131,
+    "RNC1 sprite frame bundle": 69,
+    "libultra compressed sequence": 9,
+    "menu archive bitmap font": 3,
+    "menu archive page graph": 7,
+    "menu archive paletted image": 67,
+    "relative-offset arena bundle": 37,
+    "relative-offset model bundle": 347
+  },
+  "counts_by_type_identified_total": {
+    "audio_sample": 251,
+    "font": 3,
+    "level": 37,
+    "model": 347,
+    "music_sequence": 9,
+    "sprite_bundle": 69,
+    "texture_image": 365,
+    "ui_page": 7
+  },
+  "counts_by_verification_status": {
+    "decoded_source_manifest": 367,
+    "observed_pending_menu_manifest_readback": 77,
+    "validated_source_layout": 384,
+    "verified_encoded_payload_span": 260
+  },
+  "coverage_claim": "Initial identified subset only; no full-ROM completeness percentage",
+  "dedup_rule": "Source resource identities and exact payload locations/format/palette determine rows. Equal bytes alone never merge unrelated IDs. Sprite bundles and their distinct frame images are different asset types. Audio samples use exact encoded ROM intervals and descriptor relations; music sequences use source ID plus archive payload interval. Control graph entities are not added as playable sounds.",
+  "distinct_assets_jsonl_sha256": "f03d7e9ad84e48cd49b67414aa206397950c6b7c7300b581e14c662dd0a7ab44",
+  "identified_total_including_observed": 1088,
+  "menu_manifest_integrity_gap": {
+    "artifact": "menu-archive.us-rev1.json",
+    "current_sha256": "7f75906327ddfb584751195c7c69e429f1e788bb4c71b975759baee9d1a38bb5",
+    "listed_sha256": "8cfc5fdb136cbf7d376a64bd772afdae11fcb7b5eebceee3c64952cd0d5aeec4",
+    "reason": "Manifest timestamp postdates SHA256SUMS. The ROM and pinned source-file hashes, manifest identity fields, counts, and imported ranges were checked; the decoder was not rerun and the stale list was not updated here.",
+    "verification_status": "observed_pending_decoder_readback"
+  },
+  "negative_control": "duplicate source asset ID rejected in one-off converter",
+  "not_counted": [
+    "generated font atlases",
+    "sprite-frame references beyond distinct payloads",
+    "generic containers, compression records, coverage atoms, glyph metrics, page nodes",
+    "bank containers, instrument records, sound definitions, wave descriptors, cue IDs, cue variants/layers"
+  ],
+  "observed_pending_validation": {
+    "counts_by_format": {
+      "menu archive bitmap font": 3,
+      "menu archive page graph": 7,
+      "menu archive paletted image": 67
+    },
+    "counts_by_type": {
+      "font": 3,
+      "texture_image": 67,
+      "ui_page": 7
+    },
+    "distinct_assets": 77,
+    "named": 0,
+    "reason": "Current menu archive manifest postdates its SHA256SUMS list; decoder readback pending",
+    "unnamed": 77
+  },
+  "revision": "us-rev1",
+  "rom_sha256": "5dfbae59e4a3860b740ccbb28f33aad624315e30bfca6d60abd62d12a89e0089",
+  "rom_size": 8388608,
+  "schema": "rage-wars-distinct-asset-summary-v3",
+  "sound_inventory_complete": false,
+  "source_artifacts_sha256": {
+    "arenas.us-rev1.json": "65e40e6b18f211de209623c0362e5c39164e67e5691d3ccd553cab33ccbdb99f",
+    "audio-catalog/CONTRACT.md": "9563260b853cb92b54a6247bcf3651916b12a188a394627a24dd5d0e22a87a8c",
+    "audio-catalog/observed.us-rev1.json": "0d023b804bdf2f97ab549907aa85f4f28617fe4a53b9aa2cc2f6aef7ccc75c47",
+    "audio-catalog/source-evidence.json": "b2e5d763253260879e678947d98d56a9fa8b249a077f7b4283bb3d82716f8703",
+    "catalog.us-rev1.json": "ca2793231929ef0cde9122eb6a79a544d1edd926e308c266c702b2aa2d6b1602",
+    "frontend-assets.us-rev1.json": "1c31cbc327f994d112a780181a1536753b51bea0c5b6fa3bee5022a111eabe58",
+    "menu-archive.us-rev1.json": "7f75906327ddfb584751195c7c69e429f1e788bb4c71b975759baee9d1a38bb5",
+    "models.us-rev1.json": "a801c9ebdcf03ff1f733b9b9f73c694ea10441fbb532bc3d2491bcc943a15856",
+    "native-frontend-graph.json": "657e55252e0fa2e68afc49e8062b1959191fa22d4579c4d3d241deda98bbbce9"
+  },
+  "source_commit": "980e12e9a7dff0e8ab3a30cab2a0ebc1f475ae5e",
+  "sprite_frame_identity": {
+    "distinct_source_payloads": 298,
+    "equal_derived_rgba_hash_groups_not_merged": 4,
+    "external_palette_dependency": null,
+    "key": "decoded coordinate space + exact range + source tag/format + palette dependency",
+    "observed_frame_references": 298
+  },
+  "unresolved": {
+    "audio_dynamic_or_type2_streaming": "not exhausted",
+    "counts_by_format": {
+      "unknown": null
+    },
+    "counts_by_type": {
+      "sound": null,
+      "unknown": null
+    },
+    "distinct_asset_count": null,
+    "equal_byte_duplicate_groups_not_merged_without_identity": 902,
+    "other_four_revisions": "identity_only_not_cataloged",
+    "raw_unknown_catalog_nodes_not_assets": 4182,
+    "reason": "No defensible all-ROM distinct asset denominator for unresolved records",
+    "sound_asset_count": null,
+    "unparsed_archive_pages_not_assets": 29,
+    "unrepresented_archive_image_descriptors_not_assets": 134
+  }
+}
