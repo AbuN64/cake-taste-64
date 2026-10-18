@@ -14,7 +14,7 @@ python3.13 -m venv /path/to/isolated-env
 /path/to/isolated-env/bin/taste dependencies
 ```
 
-Direct pins are Unbake `b25437c884c2803537d17f62fdc729ee205896db` and Recipe Maker `ba2f659f027e7eba653d2bbfd94636a87ec45dcb`. The Unbake requirement exactly matches this Recipe Maker revision's requirement so the ordinary dependency resolver can resolve both. `taste dependencies` verifies each installed distribution's `direct_url.json`, Git commit and upstream URL, and Recipe Maker's matching Unbake requirement. There is no resolver bypass or source-tree import fallback.
+Direct pins are Unbake `67a8367a48b966840dab3be7758cc13aff3da3d5` and Recipe Maker `7f37b1763a038acef56fd5e4d385b5dfbbc9f773`. The Unbake requirement exactly matches this Recipe Maker revision's requirement so the ordinary dependency resolver can resolve both. `taste dependencies` verifies each installed distribution's `direct_url.json`, Git commit and upstream URL, and Recipe Maker's matching Unbake requirement. There is no resolver bypass or source-tree import fallback.
 
 ## Project profile
 
