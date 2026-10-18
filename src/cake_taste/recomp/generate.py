@@ -14,11 +14,11 @@ from typing import Any
 from cake_taste import TasteError
 from cake_taste.files import atomic_bytes, atomic_json, sha256_file
 
+from .indirect import hooks as indirect_hooks
 from .model import Section, boot_segment, build_sections, flat_image, symbols_toml
 from .settings import Settings
 from .splat import Layout, parse_layout
 from .supplement import read_sections
-from .indirect import hooks as indirect_hooks
 
 _FAILED = re.compile(r"^(?:Error recompiling|Failed to analyze) (\S+?),?$")
 

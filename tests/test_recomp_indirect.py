@@ -1,7 +1,7 @@
 import struct
 import tomllib
 import unittest
-from dataclasses import replace
+
 from cake_taste import TasteError
 from cake_taste.recomp.asmfuncs import Function
 from cake_taste.recomp.indirect import hooks

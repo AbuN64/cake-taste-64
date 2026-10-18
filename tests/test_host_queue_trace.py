@@ -66,6 +66,7 @@ int main(int argc, char**) {
             self.assertEqual(rows[1]["stack"], [])
             for value in ("invalid", "0x80000101", "0x100000000", "0x80000ff0"):
                 env["N64R_QUEUE_ADDRESS"] = value
-                result = subprocess.run([str(binary)] + (["span"] if value == "0x80000ff0" else []), env=env, capture_output=True, text=True)
+                argv = [str(binary)] + (["span"] if value == "0x80000ff0" else [])
+                result = subprocess.run(argv, env=env, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 4)
                 self.assertIn("queue trace", result.stderr)

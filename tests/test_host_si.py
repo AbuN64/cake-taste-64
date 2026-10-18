@@ -13,7 +13,9 @@ class SiTests(unittest.TestCase):
             (p / 'librecomp').mkdir()
             (p / 'ultramodern').mkdir()
             (p / 'host_profile.h').write_text('#define HOST_RDRAM_SIZE 4096u\n')
-            (p / 'librecomp/game.hpp').write_text('#pragma once\n#include <cstdint>\nstruct recomp_context {uint64_t r2,r4,r5;};\n')
+            (p / 'librecomp/game.hpp').write_text(
+                '#pragma once\n#include <cstdint>\nstruct recomp_context {uint64_t r2,r4,r5;};\n'
+            )
             (p / 'ultramodern/ultramodern.hpp').write_text('namespace ultramodern {void send_si_message();}\n')
             (p / 'ultramodern/input.hpp').write_text('''#pragma once
 #include <cstdint>
@@ -47,7 +49,8 @@ int main(int argc,char**argv){
  uint8_t ram[4096]={};recomp_context c{99,0,0x80000100};
  auto byte=[&](int i)->uint8_t&{return ram[256+(i^3)];};
  auto dma=[&](int dir){
- unsigned before=completions;c.r4=dir;__osSiRawStartDma_recomp(ram,&c);assert(c.r2==0&&completions==before);assert(delay_ns==(dir?64000:576000));
+ unsigned before=completions;c.r4=dir;__osSiRawStartDma_recomp(ram,&c);
+ assert(c.r2==0&&completions==before);assert(delay_ns==(dir?64000:576000));
  __osSiDeviceBusy_recomp(ram,&c);assert(c.r2==1);
  __osSiRawStartDma_recomp(ram,&c);assert(c.r2==uint64_t(-1)&&completions==before);
  finish();assert(completions==before+1);__osSiDeviceBusy_recomp(ram,&c);assert(c.r2==0);
