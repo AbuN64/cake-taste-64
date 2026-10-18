@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import curses
 import os
 import shlex
 import signal
 import sys
+from collections import deque
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,8 +15,6 @@ from typing import Any
 
 from cake_taste.files import atomic_json, sha256_file
 from cake_taste.logs.events import append_event
-from cake_taste.logs.terminal import resize_to_tty
-from cake_taste.logs.wrap import WrappedLog, wrap_line
 
 
 def _now() -> str:
@@ -27,24 +25,17 @@ def _fill(values: list[str], mapping: dict[str, str]) -> list[str]:
     return [str(value).format_map(mapping) for value in values]
 
 
-def _put(screen, row: int, value: str, attr: int = 0) -> None:
-    height, width = screen.getmaxyx()
-    if row >= height or width < 3:
-        return
-    with suppress(curses.error):
-        screen.addnstr(row, 1, value, width - 2, attr)
-
-
 class Supervisor:
-    def __init__(self, profile: Any, role_id: str, config: dict[str, Any], screen):
+    def __init__(self, profile: Any, role_id: str, config: dict[str, Any], screen=None):
         self.profile, self.role_id, self.config, self.screen = profile, role_id, config, screen
+        self.on_change = lambda: None
         self.status_path = profile.resolve_path(config["status_path"])
         self.runs_root = profile.resolve_path(config["runs_root"])
         self.retry_delay = int(config["retry_delay_seconds"])
         self.watchdog = float(config["watchdog_seconds"])
         if self.retry_delay <= 0 or self.watchdog <= 0:
             raise ValueError("retry and watchdog durations must be positive")
-        self.lines = WrappedLog(max_lines=int(config.get("max_lines", 2000)))
+        self.lines = deque(maxlen=int(config.get("max_lines", 2000)))
         self.phase = "starting"
         self.attempt = 0
         self.step = ""
@@ -88,73 +79,15 @@ class Supervisor:
             "command": self.current_command,
             "binary_sha256": self.current_sha,
             "started_at": self.started_at,
-            "terminal_rows_columns": list(self.screen.getmaxyx()),
+            "terminal_rows_columns": list(self.screen.getmaxyx()) if self.screen else None,
+            "run_dir": str(self.run_dir) if self.run_dir else None,
+            "log": str(self.run_dir / "output.log") if self.run_dir else None,
             "updated_at": _now(),
         }
 
     def persist(self) -> None:
         atomic_json(self.status_path, self.status())
-        self.draw()
-
-    def draw(self) -> None:
-        screen = self.screen
-        screen.erase()
-        height, width = screen.getmaxyx()
-        state = (
-            str(self.config.get("debugger_hold_label", "debugger hold"))
-            if self.hold_kind == "debugger"
-            else ("signal " + self.signal_name if self.signal_name else self.phase.replace("_", " "))
-        )
-        headers = [
-            str(self.config.get("title", self.role_id))
-            + " | "
-            + state
-            + (
-                " | retry " + str(self.retry_remaining) + "/" + str(self.retry_delay) + "s"
-                if self.config.get("auto_retry", True)
-                else " | no auto-retry"
-            ),
-            "Reason: " + (self.reason or "awaiting actual process output"),
-            "Attempt " + str(self.attempt) + " | last " + (self.last_result or "none") + " exit " + str(self.last_exit),
-            "ACTUAL stdout/stderr and debugger frames:",
-        ]
-        row = 0
-        for header in headers:
-            for part in wrap_line(header, width - 2):
-                if row < height - 2:
-                    _put(screen, row, part, curses.A_BOLD if row == 0 else 0)
-                    row += 1
-        for index, line in enumerate(self.lines.layout(width - 2, max(1, height - row - 1))):
-            _put(screen, row + index, line)
-        _put(screen, height - 1, "F5 restart F7 pause | PgUp/PgDn Home/End wheel | " + self.lines.position())
-        screen.refresh()
-
-    def handle_key(self, key: int) -> None:
-        if key == curses.KEY_F5:
-            self.paused = False
-            self.restart.set()
-            self.lines.append("[control] explicit cold restart requested")
-        elif key == curses.KEY_F7:
-            self.paused = not self.paused
-            self.lines.append("[control] automatic retry " + ("paused" if self.paused else "resumed"))
-        elif key == curses.KEY_PPAGE:
-            self.lines.page(-1)
-        elif key == curses.KEY_NPAGE:
-            self.lines.page(1)
-        elif key == curses.KEY_HOME:
-            self.lines.home()
-        elif key == curses.KEY_END:
-            self.lines.end()
-        elif key == curses.KEY_MOUSE:
-            try:
-                state = curses.getmouse()[4]
-                if state & curses.BUTTON4_PRESSED:
-                    self.lines.scroll(-3)
-                elif state & curses.BUTTON5_PRESSED:
-                    self.lines.scroll(3)
-            except curses.error:
-                pass
-        self.persist()
+        self.on_change()
 
     def _command(self, run_dir: Path) -> tuple[list[str], dict[str, str], Path]:
         link = self.profile.resolve_path(self.config["release_current"])
@@ -394,35 +327,12 @@ class Supervisor:
 
 
 def run_supervisor(profile: Any, role_id: str, config: dict[str, Any]) -> None:
-    def main(screen):
-        with suppress(curses.error):
-            curses.curs_set(0)
-        screen.keypad(True)
-        screen.nodelay(True)
-        curses.mousemask(curses.ALL_MOUSE_EVENTS)
+    from cake_taste.logs.console import ConsoleApp
+    from cake_taste.logs.dashboard_sources import Sources
+    from cake_taste.logs.events import events_path
 
-        async def asynchronous():
-            state = Supervisor(profile, role_id, config, screen)
-            loop = asyncio.get_running_loop()
-
-            def input_ready():
-                while (key := screen.getch()) != -1:
-                    state.handle_key(key)
-
-            def resize():
-                resize_to_tty(sys.stdin.fileno())
-                state.draw()
-
-            loop.add_reader(sys.stdin.fileno(), input_ready)
-            loop.add_signal_handler(signal.SIGWINCH, resize)
-            resize()  # The compositor may have resized foot before the handler existed.
-            try:
-                await state.manage()
-            finally:
-                loop.remove_reader(sys.stdin.fileno())
-                loop.remove_signal_handler(signal.SIGWINCH)
-                await state._stop_child()
-
-        asyncio.run(asynchronous())
-
-    curses.wrapper(main)
+    sources = dict(profile.section("logs").get("console_sources", {}))
+    sources.setdefault("supervisor_status", str(profile.resolve_path(config["status_path"])))
+    sources.setdefault("release_current", str(profile.resolve_path(config["release_current"])))
+    reader = Sources(events_path(profile), title=str(config.get("title", role_id)), config=sources)
+    ConsoleApp(reader, Supervisor(profile, role_id, config)).run()

@@ -23,7 +23,7 @@ class Profile:
 
 
 class MissionConsoleTests(unittest.TestCase):
-    def test_public_kind_filter_and_sticky_failure(self):
+    def test_public_kind_filter_and_shared_sources(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(cli, "run_console") as console:
             root = Path(directory)
             cli.run(
@@ -32,21 +32,10 @@ class MissionConsoleTests(unittest.TestCase):
             options = console.call_args.kwargs
             self.assertEqual(options["kinds"], {"PORT-FAIL", "PROBE", "DECOMP", "HANDOFF", "COMMIT"})
             self.assertEqual(options["host_log"], root / "host.log")
-            self.assertEqual(options["header"].kinds, ["PORT-FAIL"])
+            self.assertEqual(options["sources"], {})
             records = [make_event("a", "info", "noise"), make_event("a", "info", "finding", kind="DECOMP")]
             self.assertEqual(selected_events(records, options["kinds"]), records[1:])
             self.assertEqual(selected_events(records, None), records)
-            header = options["header"]
-            header.update(
-                make_event(
-                    "port",
-                    "failed",
-                    "load finished. ERROR: caller boot: owner0x123 has no native implementation",
-                    kind="PORT-FAIL",
-                )
-            )
-            self.assertIn("caller boot: owner0x123", " ".join(header.lines(45)))
-            self.assertNotIn("load finished", " ".join(header.lines(45)))
 
     def test_host_output_suppresses_spam_and_rate_limits_heartbeat(self):
         with tempfile.TemporaryDirectory() as directory:

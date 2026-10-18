@@ -1,23 +1,24 @@
-"""Curses console driven by JSONL append and terminal resize events."""
-
+"""One rich, expandable console for mission evidence and supervised boot chains."""
 from __future__ import annotations
 
+import asyncio
 import ctypes
-import curses
+import hashlib
 import os
-import select
-import signal
-import sys
 from contextlib import suppress
 from pathlib import Path
+from typing import ClassVar
 
-from .events import EventReader, format_event
-from .header import Header
-from .host_output import HostOutput
-from .terminal import resize_to_tty
-from .wrap import WrappedLog, wrap_line
+from rich.text import Text
+from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual.containers import VerticalScroll
+from textual.widgets import Collapsible, Footer, Static
 
-WATCH_MASK = 0x00000002 | 0x00000080 | 0x00000100
+from .dashboard_model import Dashboard, Row
+from .dashboard_sources import Sources
+
+WATCH_MASK = 0x00000002 | 0x00000008 | 0x00000080 | 0x00000100 | 0x00000200
 
 
 def _watch_directory(directory: Path) -> int:
@@ -36,117 +37,172 @@ def _watch_directory(directory: Path) -> int:
     return fd
 
 
-def _put(screen, row: int, value: str, attr: int = 0) -> None:
-    height, width = screen.getmaxyx()
-    if row >= height or width < 3:
-        return
-    with suppress(curses.error):
-        screen.addnstr(row, 1, value, width - 2, attr)
-
-
-def _draw(screen, view: WrappedLog, count: int, title: str, header: Header) -> None:
-    screen.erase()
-    height, width = screen.getmaxyx()
-    row = 0
-    for part in wrap_line(f"{title} | {count} recorded events", width - 2):
-        _put(screen, row, part, curses.A_BOLD)
-        row += 1
-    for text in header.lines(width - 2) if header.kinds else []:
-        _put(screen, row, text)
-        row += 1
-    for index, line in enumerate(view.layout(width - 2, max(1, height - row - 1))):
-        _put(screen, row + index, line)
-    _put(screen, height - 1, "PgUp/PgDn Home/End wheel | " + view.position())
-    screen.refresh()
-
-
 def selected_events(records, kinds: set[str] | None):
     return [record for record in records if kinds is None or record.get("kind") in kinds]
 
 
-def run_console(
-    path: Path, *, title: str, max_lines: int = 4000, header: Header | None = None,
-    kinds: set[str] | None = None, host_log: Path | None = None,
-) -> None:
-    header = header or Header([], [])
-    path.parent.mkdir(parents=True, exist_ok=True)
+class EvidenceRow(Collapsible):
+    def __init__(self, row: Row):
+        self.record = row
+        self.body = Static(Text(row.details), classes="details")
+        super().__init__(self.body, title=self.label(row), collapsed=True,
+                         id="row-" + hashlib.sha256(row.key.encode()).hexdigest()[:16], classes=row.state)
 
-    def main(screen):
-        with suppress(curses.error):
-            curses.curs_set(0)
-        screen.keypad(True)
-        screen.nodelay(True)
-        curses.mousemask(curses.ALL_MOUSE_EVENTS)
-        reader = EventReader(path)
-        view = WrappedLog(max_lines=max_lines)
-        directories = {path.parent}
-        if host_log:
-            host_log.parent.mkdir(parents=True, exist_ok=True)
-            directories.add(host_log.parent)
-        watchers = {_watch_directory(directory) for directory in directories}
-        host = HostOutput(host_log) if host_log else None
-        wake_read, wake_write = os.pipe2(os.O_NONBLOCK | os.O_CLOEXEC)
-        previous = signal.set_wakeup_fd(wake_write)
-        signal.signal(signal.SIGWINCH, lambda _sig, _frame: None)
-        poller = select.poll()
-        poller.register(sys.stdin.fileno(), select.POLLIN)
-        for watcher in watchers:
-            poller.register(watcher, select.POLLIN)
-        poller.register(wake_read, select.POLLIN)
-        try:
-            for record in selected_events(reader.read_new(), kinds):
-                header.update(record)
-                for line in format_event(record):
-                    view.append(line)
-            if host:
-                for line in host.read_new():
-                    view.append(line)
-            resize_to_tty(sys.stdin.fileno())
-            _draw(screen, view, reader.count, title, header)
-            while True:
-                for fd, _mask in poller.poll():
-                    if fd in watchers:
-                        with suppress(BlockingIOError):
-                            os.read(fd, 65536)
-                        for record in selected_events(reader.read_new(), kinds):
-                            header.update(record)
-                            for line in format_event(record):
-                                view.append(line)
-                        if host:
-                            for line in host.read_new():
-                                view.append(line)
-                    elif fd == wake_read:
-                        with suppress(BlockingIOError):
-                            os.read(wake_read, 4096)
-                        resize_to_tty(sys.stdin.fileno())
-                    else:
-                        while True:
-                            key = screen.getch()
-                            if key == -1:
-                                break
-                            if key == curses.KEY_PPAGE:
-                                view.page(-1)
-                            elif key == curses.KEY_NPAGE:
-                                view.page(1)
-                            elif key == curses.KEY_HOME:
-                                view.home()
-                            elif key == curses.KEY_END:
-                                view.end()
-                            elif key == curses.KEY_MOUSE:
-                                try:
-                                    state = curses.getmouse()[4]
-                                    if state & curses.BUTTON4_PRESSED:
-                                        view.scroll(-3)
-                                    elif state & curses.BUTTON5_PRESSED:
-                                        view.scroll(3)
-                                except curses.error:
-                                    pass
-                _draw(screen, view, reader.count, title, header)
-        finally:
-            signal.set_wakeup_fd(previous)
-            os.close(wake_read)
-            os.close(wake_write)
-            for watcher in watchers:
-                os.close(watcher)
+    @staticmethod
+    def label(row: Row) -> str:
+        marker = {"passed": "✓", "stop": "!", "planned": "○", "raw": "≡"}.get(row.state, "•")
+        # Collapsible titles accept markup, so escape untrusted evidence.
+        return Text(f"{marker} {row.title}").markup
 
-    curses.wrapper(main)
+    def update_record(self, row: Row) -> None:
+        if row != self.record:
+            self.record = row
+            self.title = self.label(row)
+            self.set_classes(row.state)
+            self.body.update(Text(row.details))
+
+
+class ConsoleApp(App):
+    CSS = """
+    Screen { background: #101820; color: #d8e2eb; }
+    #heading { dock: top; height: auto; max-height: 2; background: #213346;
+               color: #ffffff; text-style: bold; padding: 0 1; }
+    #summary { dock: top; height: auto; max-height: 3; color: #b6d6e6; padding: 0 1; }
+    #rows { padding: 0 1; }
+    EvidenceRow { border: none; padding: 0; margin: 0; height: auto; }
+    CollapsibleTitle { height: 1; padding: 0; text-wrap: nowrap; text-overflow: ellipsis; }
+    CollapsibleTitle:focus { background: #304a5d; text-style: bold; }
+    .passed > CollapsibleTitle { color: #88d5a0; }
+    .stop > CollapsibleTitle { color: #ffcd82; background: #493527; text-style: bold; }
+    .planned > CollapsibleTitle { color: #7c8997; }
+    .raw > CollapsibleTitle { color: #8a9eb0; }
+    .details { height: auto; padding: 0 1 1 2; color: #c0d1de; background: #18242e; }
+    Footer { background: #213346; }
+    """
+    BINDINGS: ClassVar = [Binding("q", "quit", "Quit"), Binding("j,down", "next_row", "Next", show=False),
+                Binding("k,up", "previous_row", "Previous", show=False),
+                Binding("space", "toggle_row", "Expand"), Binding("home", "first_row", "First"),
+                Binding("end", "last_row", "Last"), Binding("f5", "restart", "Restart", show=False),
+                Binding("f7", "pause", "Pause retry", show=False)]
+
+    def __init__(self, sources: Sources, supervisor=None):
+        super().__init__()
+        self.sources, self.supervisor = sources, supervisor
+        self.widgets: dict[str, EvidenceRow] = {}
+        self.watchers: dict[Path, int] = {}
+        self.refresh_pending = False
+        self.initial = True
+        self.manage_task = None
+        self.model: Dashboard | None = None
+
+    def compose(self) -> ComposeResult:
+        yield Static("Loading evidence…", id="heading")
+        yield Static("", id="summary")
+        yield VerticalScroll(id="rows")
+        yield Footer()
+
+    async def on_mount(self) -> None:
+        await self.refresh_sources()
+        if self.supervisor:
+            self.supervisor.on_change = self.source_changed
+            self.manage_task = asyncio.create_task(self.supervisor.manage())
+
+    def source_changed(self) -> None:
+        if not self.refresh_pending:
+            self.refresh_pending = True
+            self.set_timer(0.15, self.refresh_sources)
+
+    def file_ready(self, fd: int) -> None:
+        with suppress(BlockingIOError):
+            os.read(fd, 65536)
+        self.source_changed()
+
+    async def refresh_sources(self) -> None:
+        self.refresh_pending = False
+        model = self.sources.read()
+        self.model = model
+        self.query_one("#heading", Static).update(Text(model.heading))
+        self.query_one("#summary", Static).update(Text(model.summary))
+        container = self.query_one("#rows", VerticalScroll)
+        keys = [row.key for row in model.rows]
+        for key in list(self.widgets):
+            if key not in keys:
+                await self.widgets.pop(key).remove()
+        for row in model.rows:
+            if row.key in self.widgets:
+                self.widgets[row.key].update_record(row)
+            else:
+                widget = EvidenceRow(row)
+                self.widgets[row.key] = widget
+                await container.mount(widget)
+        container.sort_children(key=lambda widget: keys.index(widget.record.key))
+        if self.initial and model.focus_key in self.widgets:
+            widget = self.widgets[model.focus_key]
+            widget.query_one("CollapsibleTitle").focus()
+            self.call_after_refresh(container.scroll_to, y=max(0, keys.index(model.focus_key) - 7), animate=False)
+            self.initial = False
+        loop = asyncio.get_running_loop()
+        directories = self.sources.directories()
+        for directory in self.watchers.keys() - directories:
+            fd = self.watchers.pop(directory)
+            loop.remove_reader(fd)
+            os.close(fd)
+        for directory in directories - self.watchers.keys():
+            fd = _watch_directory(directory)
+            self.watchers[directory] = fd
+            loop.add_reader(fd, self.file_ready, fd)
+
+    def _titles(self):
+        return list(self.query("CollapsibleTitle"))
+
+    def _move(self, delta: int) -> None:
+        titles = self._titles()
+        if titles:
+            current = titles.index(self.focused) if self.focused in titles else 0
+            titles[max(0, min(len(titles) - 1, current + delta))].focus()
+
+    def action_next_row(self) -> None:
+        self._move(1)
+
+    def action_previous_row(self) -> None:
+        self._move(-1)
+
+    def action_first_row(self) -> None:
+        if titles := self._titles():
+            titles[0].focus()
+
+    def action_last_row(self) -> None:
+        if titles := self._titles():
+            titles[-1].focus()
+
+    def action_toggle_row(self) -> None:
+        if self.focused and isinstance(self.focused.parent, Collapsible):
+            row = self.focused.parent
+            row.collapsed = not row.collapsed
+
+    def action_restart(self) -> None:
+        if self.supervisor:
+            self.supervisor.paused = False
+            self.supervisor.restart.set()
+
+    def action_pause(self) -> None:
+        if self.supervisor:
+            self.supervisor.paused = not self.supervisor.paused
+            self.supervisor.persist()
+
+    async def on_unmount(self) -> None:
+        loop = asyncio.get_running_loop()
+        for fd in self.watchers.values():
+            loop.remove_reader(fd)
+            os.close(fd)
+        if self.manage_task:
+            self.manage_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self.manage_task
+            await self.supervisor._stop_child()
+
+
+def run_console(path: Path, *, title: str, max_lines: int = 200,
+                kinds: set[str] | None = None, host_log: Path | None = None, sources: dict | None = None) -> None:
+    ConsoleApp(Sources(path, title=title, config=sources, kinds=kinds, host_log=host_log,
+                       limit=min(max_lines, 200))).run()
