@@ -12,7 +12,7 @@ from typing import ClassVar
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import VerticalScroll
+from textual.containers import Vertical, VerticalScroll
 from textual.widgets import Collapsible, Footer, Static
 
 from .dashboard_model import Dashboard, Row
@@ -63,11 +63,13 @@ class EvidenceRow(Collapsible):
 
 
 class ConsoleApp(App):
+    AUTO_FOCUS = None
     CSS = """
     Screen { background: #101820; color: #d8e2eb; }
-    #heading { dock: top; height: auto; max-height: 2; background: #213346;
+    #banner { dock: top; height: auto; max-height: 5; }
+    #heading { height: auto; max-height: 2; background: #213346;
                color: #ffffff; text-style: bold; padding: 0 1; }
-    #summary { dock: top; height: auto; max-height: 3; color: #b6d6e6; padding: 0 1; }
+    #summary { height: auto; max-height: 3; color: #b6d6e6; padding: 0 1; }
     #rows { padding: 0 1; }
     EvidenceRow { border: none; padding: 0; margin: 0; height: auto; }
     CollapsibleTitle { height: 1; padding: 0; text-wrap: nowrap; text-overflow: ellipsis; }
@@ -96,8 +98,9 @@ class ConsoleApp(App):
         self.model: Dashboard | None = None
 
     def compose(self) -> ComposeResult:
-        yield Static("Loading evidence…", id="heading")
-        yield Static("", id="summary")
+        with Vertical(id="banner"):
+            yield Static("Loading evidence…", id="heading")
+            yield Static("", id="summary")
         yield VerticalScroll(id="rows")
         yield Footer()
 

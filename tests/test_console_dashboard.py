@@ -96,6 +96,7 @@ class ConsoleInteractionTests(unittest.IsolatedAsyncioTestCase):
         app = ConsoleApp(Source())
         async with app.run_test(size=(106, 29)) as pilot:
             row = app.query_one(EvidenceRow)
+            self.assertGreater(app.query_one("#summary").region.y, app.query_one("#heading").region.y)
             self.assertTrue(row.collapsed)
             await pilot.press("enter")
             self.assertFalse(row.collapsed)
