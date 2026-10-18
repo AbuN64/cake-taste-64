@@ -96,7 +96,8 @@ def _run(command: list[str], cwd: Path) -> tuple[int, str, int]:
     return done.returncode, done.stdout + done.stderr, max(after, before)
 
 
-def _locate_crash(settings: Settings, version: str, entry: int | None, ignored: list[str], overlays: list[str]) -> str:
+def _locate_crash(settings: Settings, version: str, entry: int | None, ignored: list[str], overlays: list[str],
+                  alias: dict[str, str]) -> str:
     """Name the function that kills N64Recomp: ignore all others in halves until one is left."""
     out = settings.out(version)
     _, sections, _ = build(settings, version)
@@ -105,9 +106,15 @@ def _locate_crash(settings: Settings, version: str, entry: int | None, ignored: 
 
     def dies(candidates: list[str]) -> bool:
         keep = set(candidates)
-        skip = [*ignored, *(n for n in names if n not in keep)]
-        atomic_bytes(probe, config_toml(settings, version, entry, skip, overlays).encode())
-        return _run([str(settings.n64recomp), str(probe)], out)[0] < 0
+        while True:
+            skip = [*ignored, *(alias.get(n, n) for n in names if n not in keep)]
+            atomic_bytes(probe, config_toml(settings, version, entry, skip, overlays).encode())
+            code, log, _ = _run([str(settings.n64recomp), str(probe)], out)
+            missing = re.search(r"Function (\S+) is set as ignored in the config file but does not exist", log)
+            if missing is None or missing.group(1) in alias:
+                return code < 0
+            # built-in "renamed" functions are looked up as <name>_recomp by the ignore list
+            alias[missing.group(1)] = missing.group(1) + "_recomp"
 
     pool = names
     if not dies(pool):
@@ -166,7 +173,7 @@ def generate(settings: Settings, version: str, refused_copy: Path | None = None)
             continue
         failed = next((m.group(1) for ln in reversed(log.splitlines()) if (m := _FAILED.match(ln.strip()))), None)
         if failed is None and code < 0 and len(refused) < settings.max_refusals:
-            failed = _locate_crash(settings, version, entry, ignored, overlays)
+            failed = _locate_crash(settings, version, entry, ignored, overlays, alias)
             log += f"\nN64Recomp died with signal {-code} while analysing {failed}\nError recompiling {failed}\n"
         if failed is None or len(refused) >= settings.max_refusals:
             raise TasteError("recomp.n64recomp", f"exit {code}: {' | '.join(log.strip().splitlines()[-3:])}")
