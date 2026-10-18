@@ -109,11 +109,11 @@ class Supervisor:
             str(self.config.get("title", self.role_id))
             + " | "
             + state
-            + " | retry "
-            + str(self.retry_remaining)
-            + "/"
-            + str(self.retry_delay)
-            + "s",
+            + (
+                " | retry " + str(self.retry_remaining) + "/" + str(self.retry_delay) + "s"
+                if self.config.get("auto_retry", True)
+                else " | no auto-retry"
+            ),
             "Reason: " + (self.reason or "awaiting actual process output"),
             "Attempt " + str(self.attempt) + " | last " + (self.last_result or "none") + " exit " + str(self.last_exit),
             "ACTUAL stdout/stderr and debugger frames:",
@@ -223,6 +223,11 @@ class Supervisor:
             self.persist()
 
     async def _countdown(self) -> bool:
+        if not self.config.get("auto_retry", True):
+            self.phase = "held_until_restart"
+            self.persist()
+            await self.restart.wait()
+            return False
         self.retry_remaining = self.retry_delay
         self.phase = "debugger_hold_countdown" if self.debug_stopped else "retry_countdown"
         self.persist()

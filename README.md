@@ -71,3 +71,11 @@ Core tests use mocked dependency processes and small temporary profiles. Those t
 The core uses a profile byte digest and verified dependency commits for durable identity, isolates process imports and runtime namespaces, and keeps project facts out of generic code. Completion signals replace polling; timeouts and schema failures are explicit. Stages report measured command duration. There is one CLI and no retired compatibility route. Domain-specific output behavior and resource limits remain the domain owner's proof obligation.
 
 Asset ledger dashboards: `taste catalog render` validates a project ledger and publishes a searchable metadata snapshot. See [catalog contract](src/cake_taste/catalog/README.md).
+
+## Stream
+
+`taste stream up` (the `stream.up` profile section) starts a headless compositor with a 2x2 tile grid, VNC, a noVNC page with an audio leg, and a status bar fed by `taste logs status-line`. Every role runs once and holds its last output; nothing respawns a role. Only the compositor's exit restarts the unit.
+- `taste stream restart <role>` runs the role again (stops its process group first); `taste stream stop <role>` stops it and holds the screen.
+- `taste stream send <role> <keys...>` focuses the role's window (its own overlay window, else its tile) and types with wtype: `ctrl+c`, `F5`, `Return` are keys, other tokens are typed text; default focus is restored after.
+- Roles are profile entries (`command`, `env`, `overlay_app_id`, `headless: true` for roles with no tile); the lane that owns a role calls these commands for it.
+

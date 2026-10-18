@@ -71,6 +71,26 @@ class PanesTests(unittest.TestCase):
             debug = supervisor._debug_command(argv, run_dir)
             assert "--breakpoint" in debug and debug[debug.index("--breakpoint") + 1] == "Failure"
 
+    def test_without_auto_retry_a_failure_is_held_until_restart_is_requested(self):
+        async def scenario(supervisor):
+            task = asyncio.create_task(supervisor._countdown())
+            await asyncio.sleep(0.05)
+            held = not task.done() and supervisor.phase == "held_until_restart"
+            supervisor.restart.set()
+            return held, await asyncio.wait_for(task, 2)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            profile = Profile(Path(temporary))
+            config = {
+                "status_path": "status.json",
+                "runs_root": "runs",
+                "retry_delay_seconds": 30,
+                "watchdog_seconds": 90,
+                "auto_retry": False,
+            }
+            held, result = asyncio.run(scenario(Supervisor(profile, "subject", config, Screen())))
+            assert held and result is False
+
     def test_artifact_is_copied_and_verified_from_configured_root(self):
         with tempfile.TemporaryDirectory() as temporary:
             profile = Profile(Path(temporary))

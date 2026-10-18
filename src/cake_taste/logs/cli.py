@@ -24,6 +24,7 @@ def run(profile: Any, argv: tuple[str, ...]) -> dict[str, Any]:
     tail = commands.add_parser("tail")
     tail.add_argument("--count", type=int, default=20)
     commands.add_parser("watch-refs")
+    commands.add_parser("status-line")
     console = commands.add_parser("console")
     console.add_argument("--title")
     args = parser.parse_args(argv)
@@ -37,6 +38,11 @@ def run(profile: Any, argv: tuple[str, ...]) -> dict[str, Any]:
         records = reader.read_new()
         return {"path": str(path), "events": records[-max(0, args.count) :], "total": reader.count}
     section = profile.section("logs")
+    if args.action == "status-line":
+        from .statusline import follow
+
+        follow(path)
+        return {"closed": True}
     if args.action == "watch-refs":
         from .gitrefs import RefSource
 

@@ -19,7 +19,8 @@ class Unit:
     name: str
     command: list[str]
     env: dict[str, str] = field(default_factory=dict)
-    restart_seconds: float | None = 3.0  # None: exit of this unit is fatal to the whole group
+    restart_seconds: float | None = None  # None: runs once and is never restarted
+    fatal: bool = False  # exit of this unit ends the whole group (the compositor)
     process: subprocess.Popen | None = None
     pidfd: int | None = None
     restart_at: float | None = None
@@ -85,9 +86,10 @@ class Group:
             unit = self.units[key.data]
             code = self._reap(unit)
             exited.append(unit.name)
-            if unit.restart_seconds is None:
+            if unit.fatal:
                 raise FatalUnitExit(unit.name, code)
-            unit.restart_at = self._clock() + unit.restart_seconds
+            if unit.restart_seconds is not None:
+                unit.restart_at = self._clock() + unit.restart_seconds
         now = self._clock()
         for unit in self.units.values():
             if unit.restart_at is not None and unit.restart_at <= now:
@@ -119,30 +121,104 @@ class Group:
             unit.process = None
 
 
-def hold_loop(
-    command: Sequence[str],
-    restart_seconds: float,
-    *,
-    title: str = "",
-    run: Callable[..., Any] = subprocess.run,
-    sleep: Callable[[float], None] = time.sleep,
-    out: Any = None,
-    max_runs: int | None = None,
-) -> int:
-    """Run command forever inside a terminal tile; on exit keep its last output on screen and restart.
+class RoleRunner:
+    """Runs one role command once and holds its last output; restart and stop arrive as signals.
 
-    Nothing is cleared between runs, so the final screen of a dead role stays visible during the delay.
+    SIGUSR1 (re)starts the command, SIGUSR2 stops it. Nothing restarts the command on its own, and nothing
+    is cleared between runs, so the final screen of a stopped role stays visible.
     """
-    out = out or sys.stdout
-    runs = 0
-    while max_runs is None or runs < max_runs:
-        runs += 1
-        code = run(list(command)).returncode
-        stamp = time.strftime("%H:%M:%S")
-        print(
-            f"\n[{stamp}] {title or command[0]} exited rc={code}; restarting in {restart_seconds:g}s",
-            file=out,
-            flush=True,
-        )
-        sleep(restart_seconds)
-    return 0
+
+    def __init__(
+        self, command: Sequence[str], *, title: str, out: Any = None, popen: Callable[..., Any] = subprocess.Popen
+    ):
+        self.command, self.title = list(command), title
+        self.out = out or sys.stdout
+        self._popen = popen
+        self.child: Any = None
+        self.starts = 0
+
+    def _say(self, text: str) -> None:
+        print(f"\n[{time.strftime('%H:%M:%S')}] {self.title} {text}", file=self.out, flush=True)
+
+    def start(self) -> None:
+        self.child = self._popen(self.command, start_new_session=True)
+        self.starts += 1
+
+    def terminate(self, grace: float = 5.0) -> None:
+        child, self.child = self.child, None
+        if child is None or child.poll() is not None:
+            return
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(child.pid, signal.SIGTERM)
+        try:
+            child.wait(timeout=grace)
+        except subprocess.TimeoutExpired:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(child.pid, signal.SIGKILL)
+            child.wait()
+
+    def restart(self) -> None:
+        self.terminate()
+        self._say("restarting on request")
+        self.start()
+
+    def stop(self) -> None:
+        if self.child is not None and self.child.poll() is None:
+            self.terminate()
+            self._say("stopped on request; `taste stream restart` runs it again")
+
+    def reap(self) -> bool:
+        """Report a child that exited by itself; True when one did."""
+        if self.child is not None and self.child.poll() is not None:
+            code = self.child.returncode
+            self.child = None
+            self._say(f"exited rc={code}; held, `taste stream restart` runs it again")
+            return True
+        return False
+
+    def serve(self) -> None:
+        """Run once, then block on child exit and control signals; no timers, no polling."""
+        wake_read, wake_write = os.pipe()
+        os.set_blocking(wake_write, False)
+        previous = signal.set_wakeup_fd(wake_write, warn_on_full_buffer=False)
+        for number in (signal.SIGUSR1, signal.SIGUSR2, signal.SIGTERM):
+            signal.signal(number, lambda *_: None)
+        selector = selectors.DefaultSelector()
+        selector.register(wake_read, selectors.EVENT_READ, "signal")
+        self.start()
+        watched = None
+        try:
+            while True:
+                if self.child is not None and watched != self.child.pid:
+                    watched = self.child.pid
+                    selector.register(os.pidfd_open(watched), selectors.EVENT_READ, "child")
+                for key, _ in selector.select():
+                    if key.data == "child":
+                        with contextlib.suppress(KeyError, ValueError):
+                            selector.unregister(key.fd)
+                            os.close(key.fd)
+                        watched = None
+                        self.reap()
+                        continue
+                    for number in os.read(wake_read, 64):
+                        if number == signal.SIGUSR1:
+                            self.restart()
+                            if watched is not None:
+                                self._drop_watch(selector)
+                                watched = None
+                        elif number == signal.SIGUSR2:
+                            self.stop()
+                            self._drop_watch(selector)
+                            watched = None
+                        elif number == signal.SIGTERM:
+                            self.terminate()
+                            return
+        finally:
+            signal.set_wakeup_fd(previous)
+
+    @staticmethod
+    def _drop_watch(selector: Any) -> None:
+        for key in list(selector.get_map().values()):
+            if key.data == "child":
+                selector.unregister(key.fd)
+                os.close(key.fd)

@@ -96,6 +96,12 @@ def run(profile: Any, argv: tuple[str, ...]) -> dict[str, Any]:
     shot.add_argument("--publish", action="store_true")
     commands.add_parser("status")
     commands.add_parser("up")
+    commands.add_parser("audio-serve")
+    for name in ("restart", "stop"):
+        commands.add_parser(name).add_argument("role")
+    sending = commands.add_parser("send")
+    sending.add_argument("role")
+    sending.add_argument("keys", nargs="+")
     role = commands.add_parser("role")
     role.add_argument("--id", required=True)
     args = parser.parse_args(argv)
@@ -103,6 +109,19 @@ def run(profile: Any, argv: tuple[str, ...]) -> dict[str, Any]:
         return serve(profile, args.name)
     if args.action == "capture":
         return capture(profile, args.kind, args.seconds, args.publish)
+    if args.action in {"restart", "stop", "send"}:
+        from . import control
+
+        up_config = profile.section("stream")["up"]
+        run_dir = profile.resolve_path(up_config["run_dir"])
+        if args.action == "send":
+            return control.send(run_dir, up_config, args.role, args.keys)
+        return getattr(control, args.action)(run_dir, args.role)
+    if args.action == "audio-serve":
+        from .audio import make_server
+
+        make_server(profile.section("stream")["up"]["audio"]).serve_forever()
+        return {"closed": True}
     if args.action == "up":
         from .up import up
 

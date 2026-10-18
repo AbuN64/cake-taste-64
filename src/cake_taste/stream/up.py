@@ -11,13 +11,14 @@ from typing import Any
 
 from cake_taste.panes.layout import SwayIPC, _receive
 
-from . import layout
+from . import audio, layout
+from .control import pidfile
 from .inotify import wait_for_path
-from .supervise import FatalUnitExit, Group, Unit, hold_loop
+from .supervise import FatalUnitExit, Group, RoleRunner, Unit
 
 
 def endpoint_url(up: dict[str, Any]) -> str:
-    return f"http://{up['public_host']}:{up['http_port']}/vnc.html?autoconnect=1&resize=scale&view_only=1"
+    return f"http://{up['public_host']}:{up['http_port']}/stream.html"
 
 
 def substitutions(profile: Any, up: dict[str, Any], run_dir: Path, display: str = "") -> dict[str, str]:
@@ -30,6 +31,7 @@ def substitutions(profile: Any, up: dict[str, Any], run_dir: Path, display: str 
         "vnc_port": str(up["vnc_port"]),
         "http_port": str(up["http_port"]),
         "web_root": str(up["web_root"]),
+        "web_dir": str(run_dir / "web"),
     }
 
 
@@ -65,6 +67,16 @@ def wait_window(ipc: SwayIPC, wanted: str, timeout: float = 60.0) -> None:
         connection.close()
 
 
+def prepare_web(up: dict[str, Any], web_dir: Path) -> None:
+    """Serve the stock web client plus the generated stream page from one directory."""
+    web_dir.mkdir(parents=True, exist_ok=True)
+    for entry in Path(up["web_root"]).iterdir():
+        link = web_dir / entry.name
+        if not link.exists() and not link.is_symlink():
+            link.symlink_to(entry)
+    (web_dir / "stream.html").write_text(audio.page(up))
+
+
 def up(profile: Any) -> dict[str, Any]:
     config = profile.section("stream")["up"]
     layout.validate(config)
@@ -76,13 +88,18 @@ def up(profile: Any) -> dict[str, Any]:
     ready.unlink(missing_ok=True)
     for stale in [*run_dir.glob("sway-ipc.*"), *run_dir.glob("wayland-*")]:
         stale.unlink(missing_ok=True)
-    conf.write_text(layout.sway_config(config))
-    base_env = {"XDG_RUNTIME_DIR": str(run_dir)}
+    base_mapping = substitutions(profile, config, run_dir)
+    base_env = {"XDG_RUNTIME_DIR": str(run_dir), **format_env(config.get("env", {}), base_mapping)}
+    prepare_web(config, run_dir / "web")
+    if "audio" in config:
+        audio.ensure_sink(config["audio"]["sink"], {**os.environ, **base_env})
+    bar = config.get("bar")
+    conf.write_text(layout.sway_config(config, format_command(bar["command"], base_mapping) if bar else None))
     group = Group()
     signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
     try:
         sway_env = {**base_env, **format_env(config.get("compositor_env", {}), substitutions(profile, config, run_dir))}
-        sway = Unit("compositor", [*config.get("compositor", ["sway"]), "-c", str(conf)], sway_env, None)
+        sway = Unit("compositor", [*config.get("compositor", ["sway"]), "-c", str(conf)], sway_env, fatal=True)
         group.start(sway)
         assert sway.process is not None
         ipc_path = run_dir / f"sway-ipc.{os.getuid()}.{sway.process.pid}.sock"
@@ -94,15 +111,20 @@ def up(profile: Any) -> dict[str, Any]:
         display = sockets[0]
         mapping = substitutions(profile, config, run_dir, display)
         child_env = {**base_env, "WAYLAND_DISPLAY": display, "SWAYSOCK": str(ipc_path)}
-        for name, service in config.get("services", {}).items():
+
+        def start_service(name: str, service: dict[str, Any]) -> None:
             group.start(
                 Unit(
                     name,
                     format_command(service["command"], mapping),
                     {**child_env, **format_env(service.get("env", {}), mapping)},
-                    float(service.get("restart_seconds", 3)),
+                    service.get("restart_seconds"),
                 )
             )
+
+        for name, service in config.get("services", {}).items():
+            if not service.get("after_tiles"):
+                start_service(name, service)
         ipc = SwayIPC(ipc_path)
         prefix = config.get("app_id_prefix", "tile-")
         terminal = config.get("terminal", ["foot", "--app-id={app_id}"])
@@ -120,15 +142,25 @@ def up(profile: Any) -> dict[str, Any]:
                 "--id",
                 role,
             ]
-            group.start(Unit("tile-" + role, argv, {**child_env, "STREAM_READY": str(ready)}, None))
+            group.start(Unit("tile-" + role, argv, {**child_env, "STREAM_READY": str(ready)}))
 
         layout.build_tree(ipc, config, spawn, lambda wanted: wait_window(ipc, wanted))
         ready.touch()
+        for role, spec in config["roles"].items():
+            if spec.get("headless"):
+                argv = [sys.executable, "-m", "cake_taste", "--profile", str(profile.source_file)]
+                group.start(Unit("role-" + role, [*argv, "stream", "role", "--id", role], child_env))
+        for name, service in config.get("services", {}).items():
+            if service.get("after_tiles"):
+                start_service(name, service)
         events = ipc.subscribe()
 
         def fix_overlays() -> None:
             change = _receive(events)[1]
             if isinstance(change, dict) and change.get("change") != "close":
+                focus = layout.focus_command(change, config)
+                if focus:
+                    ipc.command(focus)
                 for command in layout.overlay_fixes(ipc.tree(), config):
                     ipc.command(command)
 
@@ -157,5 +189,11 @@ def run_role(profile: Any, role: str) -> dict[str, Any]:
     run_dir = profile.resolve_path(config["run_dir"])
     mapping = substitutions(profile, config, run_dir, os.environ.get("WAYLAND_DISPLAY", ""))
     os.environ.update(format_env(spec.get("env", {}), mapping))
-    hold_loop(role_command(config, role, mapping), float(spec.get("restart_seconds", 5)), title=spec.get("title", role))
+    pid_path = pidfile(run_dir, role)
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
+    pid_path.write_text(str(os.getpid()))
+    try:
+        RoleRunner(role_command(config, role, mapping), title=spec.get("title", role)).serve()
+    finally:
+        pid_path.unlink(missing_ok=True)
     return {"role": role}
