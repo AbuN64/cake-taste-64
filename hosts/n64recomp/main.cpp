@@ -1,0 +1,138 @@
+// Generic N64Recomp host. No game constants: entrypoint and ROM hash come from the
+// generated host_profile.h; the ROM image path comes from N64R_ROM at run time.
+#include <SDL.h>
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <mutex>
+#include <vector>
+#include "host.h"
+#include "host_profile.h"
+#include "librecomp/overlays.hpp"
+#include "librecomp/rsp.hpp"
+#include "xxh3.h"
+#include "recomp_overlays.inl"
+
+// ---- probes -------------------------------------------------------------
+extern "C" void n64host_trace(const char *name) {
+    static FILE *f = [] { const char *p = std::getenv("N64R_TRACE"); FILE *h = p ? std::fopen(p, "w") : nullptr; if (h) setvbuf(h, nullptr, _IOLBF, 0); return h; }();
+    if (!f) return;
+    static std::atomic<unsigned> frame{0};
+    static std::mutex m;
+    std::lock_guard<std::mutex> g(m);
+    std::fprintf(f, "%u %u %s\n", frame.load(), (unsigned)SDL_GetThreadID(nullptr), name);
+}
+extern "C" void n64host_addrmap_init(void);
+extern "C" void n64host_memwatch(unsigned, unsigned, int) {}
+
+// ---- callbacks ----------------------------------------------------------
+RspExitReason rsp_audio(uint8_t* rdram, uint32_t ucode_addr);
+namespace {
+SDL_Window *g_window;
+void *create_gfx() {
+    SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER);
+    return nullptr;
+}
+ultramodern::renderer::WindowHandle create_window(void *) {
+    g_window = SDL_CreateWindow("n64host", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 1280, 960,
+                                SDL_WINDOW_RESIZABLE | SDL_WINDOW_VULKAN);
+    return g_window;
+}
+void update_gfx(void *) {
+    SDL_Event e;
+    while (SDL_PollEvent(&e))
+        if (e.type == SDL_QUIT) ultramodern::quit();
+}
+RspUcodeFunc *get_ucode(const OSTask *task) {
+    // type 2 = audio (M_AUDTASK); gfx tasks go to the renderer, not the RSP interpreter
+    return task->t.type == 2 ? rsp_audio : nullptr;
+}
+void message_box(const char *msg) { std::fprintf(stderr, "n64host: %s\n", msg); }
+std::string thread_name(const OSThread *) { return {}; }
+void vi_cb() {}
+void gfx_init_cb() {}
+
+recomp_func_t *find_func(uint32_t vram) {
+    for (size_t s = 0; s < num_sections; ++s)
+        for (size_t i = 0; i < section_table[s].num_funcs; ++i)
+            if (section_table[s].ram_addr + section_table[s].funcs[i].offset == vram)
+                return section_table[s].funcs[i].func;
+    return nullptr;
+}
+// When the profile entrypoint was refused by the recompiler (a cop0/TLB boot stub), the profile
+// names the stub's continuation and initial stack; its TLB mappings are the address map's table.
+extern "C" int32_t n64host_func_vram(int32_t va);
+void entry(uint8_t *rdram, recomp_context *ctx) {
+    // The runtime resolves thread entry points by guest address; a pointer into a mapped KUSEG window
+    // names the same function as its KSEG0 label, so register those aliases with the runtime.
+    for (size_t s = 0; s < num_sections; ++s)
+        for (size_t i = 0; i < section_table[s].num_funcs; ++i) {
+            int32_t v = (int32_t)(section_table[s].ram_addr + section_table[s].funcs[i].offset);
+            int32_t alias = v & 0x7FFFFFFF;
+            if (v < 0 && n64host_func_vram(alias) == v) recomp::overlays::add_loaded_function(alias, section_table[s].funcs[i].func);
+        }
+    recomp_func_t *f = find_func(HOST_ENTRY_ADDR);
+    if (!f) {
+        f = find_func(HOST_BOOT_MAIN);
+        ctx->r29 = (gpr)(int32_t)HOST_BOOT_SP;
+    }
+    if (!f) { std::fprintf(stderr, "n64host: no function at entrypoint 0x%08X or boot main 0x%08X\n", HOST_ENTRY_ADDR, HOST_BOOT_MAIN); std::exit(4); }
+    f(rdram, ctx);
+}
+}
+int main(int argc, char **argv) {
+    n64host_addrmap_init();
+    const char *rom_path = std::getenv("N64R_ROM");
+    if (!rom_path) { std::fprintf(stderr, "set N64R_ROM to the flat ROM image\n"); return 2; }
+    std::ifstream in(rom_path, std::ios::binary);
+    std::vector<uint8_t> rom((std::istreambuf_iterator<char>(in)), {});
+    if (rom.empty()) { std::fprintf(stderr, "cannot read %s\n", rom_path); return 2; }
+
+    recomp::overlays::overlay_section_table_data_t sections{section_table, num_sections, num_sections};
+    recomp::overlays::overlays_by_index_t by_index{overlay_sections_by_index, 1};
+    recomp::overlays::register_overlays(sections, by_index);
+
+    recomp::GameEntry g{};
+    g.rom_hash = XXH3_64bits(rom.data(), rom.size());
+    g.internal_name = "n64host";
+    g.display_name = HOST_VERSION;
+    g.game_id = u8"host";
+    g.mod_game_id = "host";
+    g.save_type = recomp::SaveType::AllowAll;
+    g.is_enabled = true;
+    g.entrypoint_address = (gpr)(int32_t)HOST_ENTRY_ADDR;
+    g.entrypoint = entry;
+    if (!recomp::register_game(g)) { std::fprintf(stderr, "register_game failed\n"); return 3; }
+    const char *cfgdir = std::getenv("N64R_CONFIG");
+    recomp::register_config_path(cfgdir ? cfgdir : ".");
+    // The flat image has no N64 header, so select_rom would reject it; place it where
+    // load_stored_rom looks (hash is still checked by the runtime).
+    std::filesystem::path cdir = cfgdir ? cfgdir : ".";
+    std::filesystem::create_directories(cdir);
+    std::filesystem::copy_file(rom_path, cdir / g.stored_filename(), std::filesystem::copy_options::overwrite_existing);
+
+    recomp::rsp::callbacks_t rsp_cb{get_ucode};
+    ultramodern::gfx_callbacks_t gfx_cb{create_gfx, create_window, update_gfx};
+    ultramodern::events::callbacks_t ev_cb{vi_cb, gfx_init_cb};
+    ultramodern::error_handling::callbacks_t err_cb{message_box};
+    ultramodern::threads::callbacks_t thr_cb{thread_name};
+
+    recomp::Configuration cfg{};
+    cfg.argc = argc; cfg.argv = argv;
+    cfg.project_version = recomp::Version(0, 1, 0);
+    cfg.window_handle = nullptr;
+    cfg.rsp_callbacks = rsp_cb;
+    cfg.renderer_callbacks = host_renderer_callbacks();
+    cfg.audio_callbacks = host_audio_callbacks();
+    cfg.input_callbacks = host_input_callbacks();
+    cfg.gfx_callbacks = gfx_cb;
+    cfg.events_callbacks = ev_cb;
+    cfg.error_handling_callbacks = err_cb;
+    cfg.threads_callbacks = thr_cb;
+    recomp::start_game(u8"host", "");
+    recomp::start(cfg);   // runs the gfx loop until quit
+    return 0;
+}
