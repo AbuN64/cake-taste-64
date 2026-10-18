@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import os
 import socket
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 from cake_taste import TasteError
+from cake_taste.files import sha256_file
 from cake_taste.logs.child import run_logged
 
 
@@ -18,14 +17,6 @@ def _command(values: list[str], substitutions: dict[str, str]) -> list[str]:
     if not values or not all(isinstance(item, str) for item in values):
         raise ValueError("configured command must be a nonempty string list")
     return [item.format_map(substitutions) for item in values]
-
-
-def _digest(path: Path) -> str:
-    result = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            result.update(block)
-    return result.hexdigest()
 
 
 def serve(profile: Any, name: str) -> dict[str, Any]:
@@ -58,7 +49,7 @@ def capture(profile: Any, kind: str, seconds: int = 8, publish: bool = False) ->
         "kind": kind,
         "path": str(output),
         "bytes": output.stat().st_size,
-        "sha256": _digest(output),
+        "sha256": sha256_file(output),
         "command": argv,
     }
     if publish:

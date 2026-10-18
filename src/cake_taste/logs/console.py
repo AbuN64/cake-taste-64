@@ -12,6 +12,7 @@ from contextlib import suppress
 from pathlib import Path
 
 from .events import EventReader, format_event
+from .header import Header
 from .terminal import resize_to_tty
 from .wrap import WrappedLog, wrap_line
 
@@ -42,12 +43,15 @@ def _put(screen, row: int, value: str, attr: int = 0) -> None:
         screen.addnstr(row, 1, value, width - 2, attr)
 
 
-def _draw(screen, view: WrappedLog, count: int, title: str) -> None:
+def _draw(screen, view: WrappedLog, count: int, title: str, header: Header) -> None:
     screen.erase()
     height, width = screen.getmaxyx()
     row = 0
     for part in wrap_line(f"{title} | {count} recorded events", width - 2):
         _put(screen, row, part, curses.A_BOLD)
+        row += 1
+    for text in header.lines(width - 2) if header.kinds else []:
+        _put(screen, row, text)
         row += 1
     for index, line in enumerate(view.layout(width - 2, max(1, height - row - 1))):
         _put(screen, row + index, line)
@@ -55,7 +59,8 @@ def _draw(screen, view: WrappedLog, count: int, title: str) -> None:
     screen.refresh()
 
 
-def run_console(path: Path, *, title: str, max_lines: int = 4000) -> None:
+def run_console(path: Path, *, title: str, max_lines: int = 4000, header: Header | None = None) -> None:
+    header = header or Header([], [])
     path.parent.mkdir(parents=True, exist_ok=True)
 
     def main(screen):
@@ -76,16 +81,18 @@ def run_console(path: Path, *, title: str, max_lines: int = 4000) -> None:
         poller.register(wake_read, select.POLLIN)
         try:
             for record in reader.read_new():
+                header.update(record)
                 for line in format_event(record):
                     view.append(line)
             resize_to_tty(sys.stdin.fileno())
-            _draw(screen, view, reader.count, title)
+            _draw(screen, view, reader.count, title, header)
             while True:
                 for fd, _mask in poller.poll():
                     if fd == watcher:
                         with suppress(BlockingIOError):
                             os.read(watcher, 65536)
                         for record in reader.read_new():
+                            header.update(record)
                             for line in format_event(record):
                                 view.append(line)
                     elif fd == wake_read:
@@ -114,7 +121,7 @@ def run_console(path: Path, *, title: str, max_lines: int = 4000) -> None:
                                         view.scroll(3)
                                 except curses.error:
                                     pass
-                _draw(screen, view, reader.count, title)
+                _draw(screen, view, reader.count, title, header)
         finally:
             signal.set_wakeup_fd(previous)
             os.close(wake_read)

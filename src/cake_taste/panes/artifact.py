@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -12,29 +11,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from cake_taste.files import atomic_json, sha256_file
 from cake_taste.logs.child import run_logged
-
-
-def _digest(path: Path) -> str:
-    value = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            value.update(chunk)
-    return value.hexdigest()
-
-
-def _atomic_json(path: Path, value: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix=".artifact-", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w") as out:
-            json.dump(value, out, indent=2)
-            out.write("\n")
-            out.flush()
-            os.fsync(out.fileno())
-        os.replace(temporary, path)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
 
 
 def show(profile: Any, config: dict[str, Any], source: Path, name: str) -> dict[str, Any]:
@@ -61,10 +39,10 @@ def show(profile: Any, config: dict[str, Any], source: Path, name: str) -> dict[
         "source": str(source),
         "display_copy": str(destination),
         "name": name,
-        "sha256": _digest(destination),
+        "sha256": sha256_file(destination),
         "label": str(config.get("result_label", "last actual result")),
     }
-    _atomic_json(metadata_path, record)
+    atomic_json(metadata_path, record)
     command = config.get("restart_command")
     if command:
         run_logged(
@@ -81,6 +59,6 @@ def current(profile: Any, config: dict[str, Any]) -> dict[str, Any]:
     image = Path(record["display_copy"]).resolve(strict=True)
     if not image.is_relative_to(profile.resolve_path(config["artifact_root"]).resolve()):
         raise ValueError("artifact path is outside configured root")
-    if _digest(image) != record["sha256"]:
+    if sha256_file(image) != record["sha256"]:
         raise ValueError("artifact image hash changed after staging")
     return record

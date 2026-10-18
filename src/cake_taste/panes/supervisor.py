@@ -4,18 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import curses
-import hashlib
-import json
 import os
 import shlex
 import signal
 import sys
-import tempfile
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from cake_taste.files import atomic_json, sha256_file
 from cake_taste.logs.events import append_event
 from cake_taste.logs.terminal import resize_to_tty
 from cake_taste.logs.wrap import WrappedLog, wrap_line
@@ -25,30 +23,8 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _atomic_json(path: Path, value: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix=".pane-", suffix=".json", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w") as stream:
-            json.dump(value, stream, indent=2)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
-
-
 def _fill(values: list[str], mapping: dict[str, str]) -> list[str]:
     return [str(value).format_map(mapping) for value in values]
-
-
-def _digest(path: Path) -> str:
-    value = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            value.update(chunk)
-    return value.hexdigest()
 
 
 def _put(screen, row: int, value: str, attr: int = 0) -> None:
@@ -117,7 +93,7 @@ class Supervisor:
         }
 
     def persist(self) -> None:
-        _atomic_json(self.status_path, self.status())
+        atomic_json(self.status_path, self.status())
         self.draw()
 
     def draw(self) -> None:
@@ -302,7 +278,7 @@ class Supervisor:
         self.lines.append("=== attempt " + str(self.attempt) + " ===")
         command, environment, binary = self._command(run_dir)
         self.current_binary = binary
-        self.current_sha = _digest(binary)
+        self.current_sha = sha256_file(binary)
         self.current_command = command
         launched = self._debug_command(command, run_dir)
         self.phase = "starting"
@@ -382,7 +358,7 @@ class Supervisor:
             "capture": str(self.capture) if self.capture else None,
         }
         receipt_path = run_dir / "receipt.json"
-        _atomic_json(receipt_path, receipt)
+        atomic_json(receipt_path, receipt)
         failure = (outcome, self.reason, self.signal_name)
         if outcome not in {"clean_exit", "manual_restart"} and failure != self.last_announced_failure:
             append_event(

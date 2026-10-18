@@ -24,6 +24,8 @@ def make_event(
     evidence: str | None = None,
     *,
     timestamp: datetime | None = None,
+    kind: str | None = None,
+    payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     actor, status, message = actor.strip(), status.strip(), message.strip()
     if not actor or not message:
@@ -33,7 +35,13 @@ def make_event(
     if any(ord(char) < 32 for char in actor + status):
         raise ValueError("actor/status contain control characters")
     when = timestamp or datetime.now(UTC)
+    extra: dict[str, Any] = {}
+    if kind:
+        extra["kind"] = kind.strip()
+    if payload:
+        extra["payload"] = payload
     return {
+        **extra,
         "schema": 1,
         "time": when.astimezone(UTC).isoformat(),
         "actor": actor,
@@ -49,8 +57,11 @@ def append_event(
     status: str,
     message: str,
     evidence: str | None = None,
+    *,
+    kind: str | None = None,
+    payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    record = make_event(actor, status, message, evidence)
+    record = make_event(actor, status, message, evidence, kind=kind, payload=payload)
     path = events_path(profile)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as stream:
