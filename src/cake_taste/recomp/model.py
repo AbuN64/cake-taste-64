@@ -28,6 +28,7 @@ def build_sections(
     symbols_file: Path,
     rom_size: int | None = None,
     overrides: dict[int, str] | None = None,
+    sizes: dict[int, int] | None = None,
 ) -> tuple[list[Section], dict[str, int]]:
     names = {**read_symbol_names(symbols_file), **(overrides or {})}
     ordered = sorted(layout.segments, key=lambda s: s.start)
@@ -35,6 +36,7 @@ def build_sections(
     grouped: dict[str, list[Function]] = {s.name: [] for s, _ in spans}
     used: dict[str, int] = {}
     renamed = 0
+    unused_sizes = set(sizes or {})
     functions = [(f, None) for f in read_functions(asm_dir)]
     for segment, size in spans:
         if segment.options.get("functions") and rom_size is not None and segment.start + size > rom_size:
@@ -50,12 +52,18 @@ def build_sections(
             raise TasteError(
                 "recomp.layout", f"{function.name}: vram 0x{function.vram:08X} disagrees with {owner.name}"
             )
+        extent = (sizes or {}).get(function.vram, function.size)
+        if function.rom + extent > owner.start + layout.extent(owner, rom_size):
+            raise TasteError("recomp.sections", f"{function.name} size extends beyond {owner.name}")
+        unused_sizes.discard(function.vram)
         name = names.get(function.vram, function.name)
         renamed += name != function.name
         used[name] = used.get(name, 0) + 1
         if used[name] > 1:
             name = f"{name}_{function.vram:08X}"
-        grouped[owner.name].append(Function(name, function.rom, function.vram, function.size))
+        grouped[owner.name].append(Function(name, function.rom, function.vram, extent))
+    if unused_sizes:
+        raise TasteError("recomp.sections", f"function_sizes addresses absent from functions: {sorted(unused_sizes)}")
     sections = [
         Section(s.name, s.start, s.vram or 0, size, s.overlay, tuple(sorted(grouped[s.name], key=lambda f: f.vram)))
         for s, size in spans

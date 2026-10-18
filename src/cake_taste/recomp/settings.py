@@ -20,6 +20,7 @@ _OPTIONAL = {
     "max_refusals",
     "symbol_names",
     "function_sections",
+    "function_sizes",
 }
 
 
@@ -45,6 +46,11 @@ class Settings:
     symbol_names: dict[str, dict[int, str]]
 
     function_sections: dict[str, Path] = field(default_factory=dict)
+
+    function_sizes: dict[str, dict[int, int]] = field(default_factory=dict)
+
+    def sizes_for(self, version: str) -> dict[int, int]:
+        return self.function_sizes.get(version, {})
 
     def names_for(self, version: str) -> dict[int, str]:
         return self.symbol_names.get(version, {})
@@ -115,6 +121,19 @@ def load(profile: Any) -> Settings:
     sections = raw.get("function_sections", {})
     if not isinstance(sections, dict) or not all(isinstance(v, str) and v for v in sections.values()):
         raise TasteError("config.schema", "recomp.function_sections: expected version to path objects")
+    sizes = raw.get("function_sizes", {})
+    function_sizes = {}
+    try:
+        for version, entries in sizes.items():
+            function_sizes[version] = {}
+            for address, fact in entries.items():
+                addr, size = int(address, 0), fact["size"]
+                if (addr < 0 or addr > 0xFFFFFFFF or addr & 3 or type(size) is not int
+                        or size <= 0 or size & 3 or not fact.get("source")):
+                    raise ValueError("sizes need aligned addresses, positive word extents, and a source")
+                function_sizes[version][addr] = size
+    except (AttributeError, TypeError, KeyError, ValueError) as exc:
+        raise TasteError("config.schema", f"recomp.function_sizes: {exc}") from exc
     return Settings(
         decomp_root=profile.resolve_path(raw["decomp_root"]),
         layout_glob=raw["layout_glob"],
@@ -135,4 +154,5 @@ def load(profile: Any) -> Settings:
         max_refusals=refusals,
         symbol_names=symbol_names,
         function_sections={str(v): profile.resolve_path(p) for v, p in sections.items()},
+        function_sizes=function_sizes,
     )

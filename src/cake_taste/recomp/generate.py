@@ -36,7 +36,7 @@ def build(settings: Settings, version: str) -> tuple[Layout, list[Section], dict
     rom = settings.rom(version)
     size = rom.stat().st_size if rom.is_file() else None
     sections, counts = build_sections(layout, settings.asm_path(version), settings.symbols_path(version), size,
-                                       settings.names_for(version))
+                                       settings.names_for(version), settings.sizes_for(version))
     return layout, sections, counts
 
 

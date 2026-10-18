@@ -49,6 +49,18 @@ class SupplementTests(unittest.TestCase):
                 with self.assertRaises(TasteError):
                     read_sections(path)
 
+    def test_function_extent_is_explicit_and_stays_inside_owning_section(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            settings = replace(load(build(root)), function_sizes={"v1": {0x80200400: 16}})
+            result = write_symbols(settings, "v1")
+            functions = tomllib.loads(Path(result["path"]).read_text())["section"][0]["functions"]
+            self.assertEqual(functions[0]["size"], 16)
+            self.assertEqual(functions[1]["vram"], 0x80200408)
+            for override in ({0x80200400: 0x1004}, {0x80900000: 16}):
+                with self.assertRaises(TasteError):
+                    write_symbols(replace(settings, function_sizes={"v1": override}), "v1")
+
     def test_refusal_keeps_the_concrete_cause(self):
         log = "No function found for jal target: 0x80600000\n"
         log += "Error in recompiling root, clearing output file\nError recompiling root\n"
