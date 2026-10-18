@@ -35,8 +35,15 @@ def build_sections(
     grouped: dict[str, list[Function]] = {s.name: [] for s, _ in spans}
     used: dict[str, int] = {}
     renamed = 0
-    for function in read_functions(asm_dir):
-        owner = next((s for s, size in spans if s.start <= function.rom < s.start + size), None)
+    functions = [(f, None) for f in read_functions(asm_dir)]
+    for segment, size in spans:
+        if segment.options.get("functions") and rom_size is not None and segment.start + size > rom_size:
+            raise TasteError("recomp.sections", f"{segment.name} exceeds the ROM")
+        for fn in segment.options.get("functions", []):
+            functions.append((Function(fn["name"], segment.start + fn["offset"],
+                                       (segment.vram or 0) + fn["offset"], fn["size"]), segment))
+    for function, explicit_owner in functions:
+        owner = explicit_owner or next((s for s, size in spans if s.start <= function.rom < s.start + size), None)
         if owner is None or owner.vram is None:
             raise TasteError("recomp.layout", f"{function.name} at rom 0x{function.rom:X} is in no segment")
         if owner.vram + function.rom - owner.start != function.vram:

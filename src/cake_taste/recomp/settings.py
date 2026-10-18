@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +19,7 @@ _OPTIONAL = {
     "functions_per_output_file",
     "max_refusals",
     "symbol_names",
+    "function_sections",
 }
 
 
@@ -42,6 +43,8 @@ class Settings:
     functions_per_output_file: int
     max_refusals: int
     symbol_names: dict[str, dict[int, str]]
+
+    function_sections: dict[str, Path] = field(default_factory=dict)
 
     def names_for(self, version: str) -> dict[int, str]:
         return self.symbol_names.get(version, {})
@@ -109,6 +112,9 @@ def load(profile: Any) -> Settings:
         symbol_names = {str(ver): {int(a, 0): n for a, n in m.items()} for ver, m in names.items()}
     except ValueError as error:
         raise TasteError("config.schema", f"recomp.symbol_names: bad address ({error})") from error
+    sections = raw.get("function_sections", {})
+    if not isinstance(sections, dict) or not all(isinstance(v, str) and v for v in sections.values()):
+        raise TasteError("config.schema", "recomp.function_sections: expected version to path objects")
     return Settings(
         decomp_root=profile.resolve_path(raw["decomp_root"]),
         layout_glob=raw["layout_glob"],
@@ -128,4 +134,5 @@ def load(profile: Any) -> Settings:
         functions_per_output_file=per_file,
         max_refusals=refusals,
         symbol_names=symbol_names,
+        function_sections={str(v): profile.resolve_path(p) for v, p in sections.items()},
     )

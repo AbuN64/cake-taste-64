@@ -16,13 +16,19 @@ from cake_taste.files import atomic_bytes, atomic_json, sha256_file
 from .model import Section, boot_segment, build_sections, flat_image, symbols_toml
 from .settings import Settings
 from .splat import Layout, parse_layout
+from .supplement import read_sections
 
 _FAILED = re.compile(r"^(?:Error recompiling|Failed to analyze) (\S+?),?$")
 
 
 def load_layout(settings: Settings, version: str) -> Layout:
     layouts = [parse_layout(p) for p in settings.layout_files(version)]
-    return Layout(layouts[0].sha1, tuple(s for layout in layouts for s in layout.segments))
+    segments = tuple(s for layout in layouts for s in layout.segments)
+    supplement = settings.function_sections.get(version)
+    extra = read_sections(supplement) if supplement else ()
+    if {s.name for s in segments} & {s.name for s in extra}:
+        raise TasteError("recomp.sections", "supplement section name duplicates a layout segment")
+    return Layout(layouts[0].sha1, segments + extra)
 
 
 def build(settings: Settings, version: str) -> tuple[Layout, list[Section], dict[str, int]]:
@@ -135,7 +141,7 @@ def _reason(output: str, name: str) -> str:
     lines = [ln.strip() for ln in output.splitlines() if ln.strip()]
     for index, line in enumerate(lines):
         if _FAILED.match(line) and _FAILED.match(line).group(1) == name:  # type: ignore[union-attr]
-            before = [ln for ln in lines[:index] if not ln.startswith("[Info]") and not ln.startswith("[Warn]")]
+            before = [ln for ln in lines[:index] if not ln.startswith(("[Info]", "[Warn]", "Error in recompiling"))]
             return before[-1] if before else line
     return "no reason printed"
 

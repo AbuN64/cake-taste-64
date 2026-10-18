@@ -1,0 +1,59 @@
+import json
+import tempfile
+import tomllib
+import unittest
+from dataclasses import replace
+from pathlib import Path
+
+from test_recomp import build
+
+from cake_taste import TasteError
+from cake_taste.recomp.generate import _reason, write_symbols
+from cake_taste.recomp.settings import load
+from cake_taste.recomp.supplement import read_sections
+
+
+class SupplementTests(unittest.TestCase):
+    def row(self):
+        return {"name": "late_code", "rom": 0x5800, "vram": 0x80600000, "size": 16,
+                "source": "fixture disassembly, four instructions",
+                "functions": [{"name": "late_fn", "offset": 0, "size": 16}]}
+
+    def test_explicit_section_reaches_symbols_and_analysis_image(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            profile = build(root)
+            path = root / "sections.json"
+            path.write_text(json.dumps([self.row()]))
+            rom = bytearray((root / "rom.z64").read_bytes())
+            rom[0x5800:0x5810] = bytes(range(16))
+            (root / "rom.z64").write_bytes(rom)
+            settings = replace(load(profile), function_sections={"v1": path})
+            result = write_symbols(settings, "v1")
+            tables = tomllib.loads(Path(result["path"]).read_text())["section"]
+            extra = next(s for s in tables if s["name"] == "late_code")
+            self.assertEqual(extra["functions"], [{"name": "late_fn", "vram": 0x80600000, "size": 16}])
+            flat = (root / "gen/v1/rom.flat").read_bytes()
+            self.assertEqual(flat[extra["rom"]:extra["rom"] + 16], bytes(range(16)))
+            self.assertEqual(result["functions"], 6)
+
+    def test_invalid_boundaries_and_missing_source_fail(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sections.json"
+            for mutate in (lambda r: r.update(source=""), lambda r: r.update(size=3),
+                           lambda r: r["functions"][0].update(size=20),
+                           lambda r: r["functions"].append(dict(r["functions"][0]))):
+                row = self.row()
+                mutate(row)
+                path.write_text(json.dumps([row]))
+                with self.assertRaises(TasteError):
+                    read_sections(path)
+
+    def test_refusal_keeps_the_concrete_cause(self):
+        log = "No function found for jal target: 0x80600000\n"
+        log += "Error in recompiling root, clearing output file\nError recompiling root\n"
+        self.assertEqual(_reason(log, "root"), "No function found for jal target: 0x80600000")
+
+
+if __name__ == "__main__":
+    unittest.main()
