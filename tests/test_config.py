@@ -27,7 +27,7 @@ class ConfigTests(unittest.TestCase):
             "project_root": "source",
             "runtime_root": "state",
             "output_root": "evidence",
-            "build": {"steps": [{"argv": ["tool", "argument"]}]},
+            "repro": {"steps": [{"argv": ["tool", "argument"]}]},
             "target": {
                 "asset_ledger": "evidence/asset-ledger.json",
                 "asset_observations": "evidence/asset-observations.jsonl",
@@ -47,9 +47,9 @@ class ConfigTests(unittest.TestCase):
         )
         self.assertFalse(profile.runtime_root.exists())
         self.assertFalse(profile.output_root.exists())
-        changed = profile.section("build")
+        changed = profile.section("repro")
         changed["steps"][0]["argv"].append("modified")
-        self.assertEqual(profile.section("build")["steps"][0]["argv"], ["tool", "argument"])
+        self.assertEqual(profile.section("repro")["steps"][0]["argv"], ["tool", "argument"])
         with self.assertRaises(FrozenInstanceError):
             profile.name = "modified"
         self.assertEqual(len(profile.digest), 64)
@@ -64,7 +64,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(profile.section("recomp"), {"steps": []})
 
     def test_unknown_missing_and_ill_typed_keys_fail(self) -> None:
-        for key, value in (("schema_version", True), ("name", ""), ("build", [])):
+        for key, value in (("schema_version", True), ("name", ""), ("repro", [])):
             original = self.value[key]
             self.value[key] = value
             with self.assertRaises(ConfigError):
@@ -90,7 +90,7 @@ class ConfigTests(unittest.TestCase):
             load_profile(self.file)
         profile = self.load()
         with self.assertRaisesRegex(ConfigError, "absent"):
-            profile.section("stream")
+            profile.section("media")
         with self.assertRaisesRegex(ConfigError, "unknown component"):
             profile.section("plugin")
 

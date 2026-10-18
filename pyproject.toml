@@ -9,9 +9,7 @@ description = "Bounded N64 experiments and native-output evidence"
 readme = "README.md"
 license = {file = "LICENSE"}
 requires-python = ">=3.13"
-dependencies = [
-  "textual==8.2.8",
-]
+dependencies = []
 
 [project.optional-dependencies]
 dev = ["ruff==0.16.9"]

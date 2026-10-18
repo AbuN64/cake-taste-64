@@ -16,7 +16,7 @@ from typing import Any
 from cake_taste import TasteError
 from cake_taste.config import Profile, load_profile
 
-DOMAINS = ("build", "media", "panes", "stream", "logs", "repro", "catalog", "recomp", "trace", "handoff")
+DOMAINS = ("media", "logs", "repro", "catalog", "recomp", "trace", "handoff")
 
 
 class _Parser(argparse.ArgumentParser):

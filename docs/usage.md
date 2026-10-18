@@ -34,7 +34,7 @@ Profiles are explicit JSON. Relative paths resolve against the profile file. Run
 
 `target.asset_ledger` identifies confirmed asset facts; `target.asset_observations` identifies rough observations in JSONL. Verified catalog changes cross to the owning source repository as evidence or reviewed patches.
 
-The known component sections are `build`, `media`, `panes`, `stream`, `logs`, `repro`, `recomp`, `trace`, `handoff`, and `target`. Component owners validate their own section fields. Paths, binaries, service identities, ports, titles, timezone and game-specific fatal markers belong in those sections. Secrets, runtime state, media, ROMs and dependency binaries stay outside Git.
+The known component sections are `media`, `logs`, `repro`, `recomp`, `trace`, `handoff`, and `target`. Component owners validate their own section fields. Paths, binaries, service identities, ports, titles, timezone and game-specific fatal markers belong in those sections. Secrets, runtime state, media, ROMs and dependency binaries stay outside Git.
 
 ## Commands and public boundaries
 
@@ -44,7 +44,7 @@ taste --profile /configuration/project.json profile
 
 Every machine command emits one JSON object with `ok`, `result`, `findings`, `stages`, and `invocation`; human tool logs go to stderr. Help prints plain text. CLI execution waits for process completion rather than polling. Long-running domain services own their normal event loops and write streamed logs outside the code tree.
 
-Owned components implement `cake_taste.<domain>.cli.run(profile, argv) -> dict` for `build`, `media`, `panes`, `stream`, `logs`, or `repro`. `argv` excludes the domain token. The core uses explicit lazy dispatch; there is no plugin-discovery framework, and a missing component is a named failure. `Profile.section(name)` returns a fresh dictionary and `Profile.resolve_path(value)` resolves a project path. Components can raise `TasteError(key, detail)` for named refusals. Their public behavior is accepted only through their actual integration proofs.
+Owned components implement `cake_taste.<domain>.cli.run(profile, argv) -> dict` for `media`, `logs`, or `repro`. `argv` excludes the domain token. The core uses explicit lazy dispatch; there is no plugin-discovery framework, and a missing component is a named failure. `Profile.section(name)` returns a fresh dictionary and `Profile.resolve_path(value)` resolves a project path. Components can raise `TasteError(key, detail)` for named refusals. Their public behavior is accepted only through their actual integration proofs.
 
 ## Development and evidence
 
@@ -58,11 +58,3 @@ Core tests use mocked processes and small temporary profiles. Those tests do not
 The core uses a profile byte digest for durable identity, isolates process imports and runtime namespaces, and keeps project facts out of generic code. Completion signals replace polling; timeouts and schema failures are explicit. Stages report measured command duration. There is one CLI and no retired compatibility route. Domain-specific output behavior and resource limits remain the domain owner's proof obligation.
 
 Asset ledger dashboards: `taste catalog render` validates a project ledger and publishes a searchable metadata snapshot. See [catalog contract](../src/cake_taste/catalog/README.md).
-
-## Stream
-
-`taste stream up` (the `stream.up` profile section) starts a headless compositor with a 2x2 tile grid, VNC, a noVNC page with an audio leg, and a status bar fed by `taste logs status-line`. Every role runs once and holds its last output; nothing respawns a role. Only the compositor's exit restarts the unit.
-- `taste stream restart <role>` runs the role again (stops its process group first); `taste stream stop <role>` stops it and holds the screen.
-- `taste stream send <role> <keys...>` focuses the role's window (its own overlay window, else its tile) and types with wtype: `ctrl+c`, `F5`, `Return` are keys, other tokens are typed text; default focus is restored after.
-- Roles are profile entries (`command`, `env`, `overlay_app_id`, `headless: true` for roles with no tile).
-

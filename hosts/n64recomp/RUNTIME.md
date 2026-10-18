@@ -25,7 +25,7 @@ not a dynamic TLB implementation.
 Use libxkbcommon **1.8.1** for this rig's virtual keyboard input. System1.7.0
 crashed in `xkb_keymap_key_get_syms_by_level` with both SDL2.30.9 and2.32.4.
 The 1.8.1 release fixes a negative-layout-index segfault. The private1.8.1 build
-allows the same public `taste stream send` operation to complete without a crash.
+allows the same public `decomp stream send` operation to complete without a crash.
 No system package was changed; the oracle uses its bundled SDL2.30.9 with the
 private XKB library before it in `LD_LIBRARY_PATH`.
 
