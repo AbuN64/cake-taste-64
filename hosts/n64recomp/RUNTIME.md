@@ -71,3 +71,22 @@ Addresses identify original instructions. Generation validates every target
 inside its owning function, checks the original `jr` and its `nop` delay slot,
 and emits upstream function hooks with local labels. Unknown runtime targets
 fail through the existing switch diagnostic. Effectful delay slots are rejected.
+
+## Runtime state ownership and queue diagnosis
+
+Map both halves of a controller query to the same runtime: replacing
+osContStartQuery while executing the original osContGetQuery reads stale
+original PIF memory. Thread identity must also come from the runtime that owns
+thread scheduling. Original osGetThreadId(0) reads the original kernel's
+current-thread global, which a host scheduler does not maintain. Address/name
+mappings and original-instruction sources belong in the project profile.
+
+For a queue stall, set N64R_QUEUE_TRACE to a JSONL output path and
+N64R_QUEUE_ADDRESS to an aligned guest queue address. The host records entry
+and return around queue receive/send/create and controller query/read operations,
+with monotonic microseconds, guest thread, arguments, result and the six queue
+words. The queue address filters queue-taking calls; query getters are included
+to connect completion to result consumption. A blocked receive has an entry
+without a return. The trace reads guest memory and forwards every call unchanged;
+it does not synthesize completion or alter scheduling. Unset the trace path for
+normal runs. Invalid addresses or an unwritable trace destination fail explicitly.

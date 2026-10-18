@@ -100,7 +100,7 @@ add_subdirectory(${_rt64_src} rt64)
 
 file(GLOB GEN_FUNCS CONFIGURE_DEPENDS ${N64R_GEN_DIR}/funcs/*.c)
 add_executable(n64host
-  main.cpp render_rt64.cpp audio_sdl.cpp input_sdl.cpp libultra_gaps.c addrmap.c cop0_adapter.c pi_adapter.cpp vi_adapter.cpp tlb_adapter.c si_adapter.cpp
+  main.cpp render_rt64.cpp audio_sdl.cpp input_sdl.cpp libultra_gaps.c addrmap.c cop0_adapter.c pi_adapter.cpp vi_adapter.cpp tlb_adapter.c si_adapter.cpp queue_trace.cpp
   ${CMAKE_BINARY_DIR}/gen/refused_stubs.c
   ${GEN_FUNCS} ${N64R_GEN_DIR}/rsp/rsp_audio.cpp)
 set_source_files_properties(${GEN_FUNCS} PROPERTIES COMPILE_OPTIONS "-w;-O1")
@@ -115,4 +115,7 @@ target_compile_definitions(n64host PRIVATE HLSL_CPU FFX_GCC RT64_SDL_WINDOW_VULK
 target_link_options(n64host PRIVATE -Wl,--wrap=cop0_status_write
   -Wl,--wrap=osSetEventMesg_recomp -Wl,--wrap=osPiRawStartDma_recomp
   -Wl,--wrap=osCreateViManager_recomp
+  -Wl,--wrap=osRecvMesg_recomp -Wl,--wrap=osSendMesg_recomp
+  -Wl,--wrap=osCreateMesgQueue_recomp -Wl,--wrap=osContStartQuery_recomp
+  -Wl,--wrap=osContStartReadData_recomp -Wl,--wrap=osContGetQuery_recomp
   -Wl,--wrap=switch_error -Wl,--wrap=osAiGetStatus_recomp -Wl,--wrap=osAiSetNextBuffer_recomp)
