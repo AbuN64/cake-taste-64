@@ -23,6 +23,7 @@ def run(profile: Any, argv: tuple[str, ...]) -> dict[str, Any]:
     add.add_argument("--payload", type=json.loads)
     tail = commands.add_parser("tail")
     tail.add_argument("--count", type=int, default=20)
+    commands.add_parser("watch-refs")
     console = commands.add_parser("console")
     console.add_argument("--title")
     args = parser.parse_args(argv)
@@ -36,6 +37,11 @@ def run(profile: Any, argv: tuple[str, ...]) -> dict[str, Any]:
         records = reader.read_new()
         return {"path": str(path), "events": records[-max(0, args.count) :], "total": reader.count}
     section = profile.section("logs")
+    if args.action == "watch-refs":
+        from .gitrefs import RefSource
+
+        RefSource(profile, section["git_refs"]).serve()
+        return {"closed": True}
     run_console(
         path,
         title=args.title or str(section.get("title", "ORCHESTRATOR")),
