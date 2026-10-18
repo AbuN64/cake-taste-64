@@ -96,7 +96,7 @@ def run(profile: Any, argv: tuple[str, ...]) -> dict[str, Any]:
     shot.add_argument("--publish", action="store_true")
     commands.add_parser("status")
     commands.add_parser("up")
-    commands.add_parser("audio-serve")
+    commands.add_parser("down")
     for name in ("restart", "stop"):
         commands.add_parser(name).add_argument("role")
     sending = commands.add_parser("send")
@@ -117,11 +117,10 @@ def run(profile: Any, argv: tuple[str, ...]) -> dict[str, Any]:
         if args.action == "send":
             return control.send(run_dir, up_config, args.role, args.keys)
         return getattr(control, args.action)(run_dir, args.role)
-    if args.action == "audio-serve":
-        from .audio import make_server
+    if args.action == "down":
+        from .transport import change
 
-        make_server(profile.section("stream")["up"]["audio"]).serve_forever()
-        return {"closed": True}
+        return change(profile.section("stream"), "stop")
     if args.action == "up":
         from .up import up
 

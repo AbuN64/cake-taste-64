@@ -107,12 +107,6 @@ class BarFocusAudioTests(unittest.TestCase):
         assert audio.ensure_sink("other", {}, run) is True
         assert calls[-1][:3] == ["pactl", "load-module", "module-null-sink"]
 
-    def test_page_embeds_novnc_without_view_only_and_audio_starts_muted(self):
-        html = audio.page({"audio": {"port": 6081, "path": "/audio"}})
-        assert "vnc.html?autoconnect=1" in html and "view_only" not in html
-        assert "autoplay muted" in html and "':6081/audio'" in html
-        assert "<audio" not in audio.page({})
-
     def test_status_line_prints_latest_event_and_a_placeholder(self):
         import json
 

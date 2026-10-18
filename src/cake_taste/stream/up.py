@@ -1,4 +1,4 @@
-"""`taste stream up`: headless compositor, 2x2 role tiles, VNC and browser endpoint, all from the profile."""
+"""`taste stream up`: headless compositor, 2x2 role tiles and Moonlight browser endpoint, all from the profile."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from typing import Any
 
 from cake_taste.panes.layout import SwayIPC, _receive
 
-from . import audio, layout
+from . import audio, layout, transport
 from .control import pidfile
 from .inotify import wait_for_path
 from .supervise import FatalUnitExit, Group, RoleRunner, Unit
@@ -28,10 +28,7 @@ def substitutions(profile: Any, up: dict[str, Any], run_dir: Path, display: str 
         "run_dir": str(run_dir),
         "wayland_display": display,
         "output_name": str(up["output"]["name"]),
-        "vnc_port": str(up["vnc_port"]),
         "http_port": str(up["http_port"]),
-        "web_root": str(up["web_root"]),
-        "web_dir": str(run_dir / "web"),
     }
 
 
@@ -67,20 +64,20 @@ def wait_window(ipc: SwayIPC, wanted: str, timeout: float = 60.0) -> None:
         connection.close()
 
 
-def prepare_web(up: dict[str, Any], web_dir: Path) -> None:
-    """Serve the stock web client plus the generated stream page from one directory."""
-    web_dir.mkdir(parents=True, exist_ok=True)
-    for entry in Path(up["web_root"]).iterdir():
-        link = web_dir / entry.name
-        if not link.exists() and not link.is_symlink():
-            link.symlink_to(entry)
-    (web_dir / "stream.html").write_text(audio.page(up))
-
-
 def up(profile: Any) -> dict[str, Any]:
-    config = profile.section("stream")["up"]
+    stream = profile.section("stream")
+    transport.settings(stream)
+    config = stream["up"]
     layout.validate(config)
     run_dir = profile.resolve_path(config["run_dir"])
+    # An existing compositor belongs to the tile supervisor. Never unlink its
+    # sockets or restart its applications when changing the streaming transport.
+    sockets = list(run_dir.glob("sway-ipc.*.sock"))
+    if sockets:
+        if len(sockets) != 1:
+            raise RuntimeError("ambiguous stream compositor sockets")
+        SwayIPC(sockets[0]).tree()  # Fail closed on stale or inaccessible sockets.
+        return {**transport.change(stream, "start"), "url": endpoint_url(config)}
     run_dir.mkdir(parents=True, exist_ok=True)
     run_dir.chmod(0o700)
     conf = run_dir / "sway.conf"
@@ -90,7 +87,6 @@ def up(profile: Any) -> dict[str, Any]:
         stale.unlink(missing_ok=True)
     base_mapping = substitutions(profile, config, run_dir)
     base_env = {"XDG_RUNTIME_DIR": str(run_dir), **format_env(config.get("env", {}), base_mapping)}
-    prepare_web(config, run_dir / "web")
     if "audio" in config:
         audio.ensure_sink(config["audio"]["sink"], {**os.environ, **base_env})
     bar = config.get("bar")
@@ -153,6 +149,7 @@ def up(profile: Any) -> dict[str, Any]:
         for name, service in config.get("services", {}).items():
             if service.get("after_tiles"):
                 start_service(name, service)
+        transport.change(stream, "start")
         events = ipc.subscribe()
 
         def fix_overlays() -> None:
@@ -174,6 +171,7 @@ def up(profile: Any) -> dict[str, Any]:
             raise SystemExit(1) from exc
     finally:
         group.stop()
+        transport.change(stream, "stop")
     return {"stopped": True}
 
 
