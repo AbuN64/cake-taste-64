@@ -11,6 +11,7 @@
 #include <vector>
 #include "host.h"
 #include "host_profile.h"
+#include "boot_profile.h"
 #include "librecomp/overlays.hpp"
 #include "librecomp/rsp.hpp"
 #include "xxh3.h"
@@ -65,12 +66,17 @@ recomp_func_t *find_func(uint32_t vram) {
 // When the profile entrypoint was refused by the recompiler (a cop0/TLB boot stub), the profile
 // names the stub's continuation and initial stack; its TLB mappings are the address map's table.
 extern "C" int32_t n64host_func_vram(int32_t va);
+void configure_context(uint8_t *, recomp_context *ctx) {
+    cop0_status_write(ctx, HOST_INITIAL_STATUS);
+}
 void entry(uint8_t *rdram, recomp_context *ctx) {
+    configure_context(rdram, ctx);
     // The runtime resolves thread entry points by guest address; a pointer into a mapped KUSEG window
     // names the same function as its KSEG0 label, so register those aliases with the runtime.
     for (size_t s = 0; s < num_sections; ++s)
         for (size_t i = 0; i < section_table[s].num_funcs; ++i) {
             int32_t v = (int32_t)(section_table[s].ram_addr + section_table[s].funcs[i].offset);
+            recomp::overlays::add_loaded_function(v, section_table[s].funcs[i].func);
             int32_t alias = v & 0x7FFFFFFF;
             if (v < 0 && n64host_func_vram(alias) == v) recomp::overlays::add_loaded_function(alias, section_table[s].funcs[i].func);
         }
@@ -86,11 +92,23 @@ void entry(uint8_t *rdram, recomp_context *ctx) {
 int main(int argc, char **argv) {
     n64host_addrmap_init();
     const char *rom_path = std::getenv("N64R_ROM");
-    if (!rom_path) { std::fprintf(stderr, "set N64R_ROM to the flat ROM image\n"); return 2; }
+    if (!rom_path) { std::fprintf(stderr, "set N64R_ROM to the original ROM image\n"); return 2; }
     std::ifstream in(rom_path, std::ios::binary);
     std::vector<uint8_t> rom((std::istreambuf_iterator<char>(in)), {});
     if (rom.empty()) { std::fprintf(stderr, "cannot read %s\n", rom_path); return 2; }
 
+    // Generated section offsets belong to the synthetic analysis image; runtime DMA offsets
+    // must refer to the original ROM. Match by link address, never by table position.
+    for (size_t i = 0; i < num_sections; ++i) {
+        bool found = false;
+        for (const auto &mapping : host_rom_sections) {
+            if (section_table[i].ram_addr != mapping[0]) continue;
+            section_table[i].rom_addr = mapping[1];
+            found = true;
+            break;
+        }
+        if (!found) { std::fprintf(stderr, "n64host: missing original ROM section at 0x%08X\n", section_table[i].ram_addr); return 4; }
+    }
     recomp::overlays::overlay_section_table_data_t sections{section_table, num_sections, num_sections};
     recomp::overlays::overlays_by_index_t by_index{overlay_sections_by_index, 1};
     recomp::overlays::register_overlays(sections, by_index);
@@ -103,13 +121,13 @@ int main(int argc, char **argv) {
     g.mod_game_id = "host";
     g.save_type = recomp::SaveType::AllowAll;
     g.is_enabled = true;
-    g.entrypoint_address = (gpr)(int32_t)HOST_ENTRY_ADDR;
+    g.entrypoint_address = (gpr)(int32_t)HOST_ROM_ENTRY_ADDR;
+    g.thread_create_callback = configure_context;
     g.entrypoint = entry;
     if (!recomp::register_game(g)) { std::fprintf(stderr, "register_game failed\n"); return 3; }
     const char *cfgdir = std::getenv("N64R_CONFIG");
     recomp::register_config_path(cfgdir ? cfgdir : ".");
-    // The flat image has no N64 header, so select_rom would reject it; place it where
-    // load_stored_rom looks (hash is still checked by the runtime).
+    // Install the configured original ROM where load_stored_rom expects it; hash is checked there.
     std::filesystem::path cdir = cfgdir ? cfgdir : ".";
     std::filesystem::create_directories(cdir);
     std::filesystem::copy_file(rom_path, cdir / g.stored_filename(), std::filesystem::copy_options::overwrite_existing);

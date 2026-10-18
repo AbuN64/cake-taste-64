@@ -83,6 +83,12 @@ endif()
 file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/gen)
 file(WRITE ${CMAKE_BINARY_DIR}/gen/host_profile.h
 "#pragma once\n#include <stdint.h>\n#define HOST_ENTRY_ADDR ${N64R_ENTRY}u\n#define HOST_VERSION \"${N64R_VERSION}\"\n#define HOST_ROM_SHA1 \"${N64R_SHA1}\"\n#define HOST_BOOT_MAIN ${N64R_BOOT_MAIN}u\n#define HOST_BOOT_SP ${N64R_BOOT_SP}u\n#define HOST_RDRAM_SIZE ${N64R_RDRAM_SIZE}u\n#define HOST_TLB_COUNT ${_tlbn}\nstatic const uint32_t host_tlb[][3] = {${_tlb}{0,0,0}};\n")
+# Runtime DMA uses the original ROM, never the recompiler's synthetic analysis image.
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+execute_process(COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/boot_profile.py
+  ${N64R_PROFILE} ${CMAKE_BINARY_DIR}/gen/boot_profile.h COMMAND_ERROR_IS_FATAL ANY)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  ${N64R_PROFILE} ${CMAKE_CURRENT_SOURCE_DIR}/boot_profile.py)
 set(NFD_PORTAL ON CACHE BOOL "" FORCE)  # dbus portal; avoids a GTK3 dependency
 set(RT64_STATIC ON CACHE BOOL "" FORCE)
 set(RT64_SDL_WINDOW_VULKAN ON CACHE BOOL "" FORCE)
