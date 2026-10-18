@@ -1,0 +1,27 @@
+diff --git a/ultramodern/src/threadqueue.cpp b/ultramodern/src/threadqueue.cpp
+index f9c0fa1..37800cb 100644
+--- a/ultramodern/src/threadqueue.cpp
++++ b/ultramodern/src/threadqueue.cpp
+@@ -43,14 +43,16 @@ PTR(OSThread) ultramodern::thread_queue_pop(RDRAM_ARG PTR(PTR(OSThread)) queue_)
+ bool ultramodern::thread_queue_remove(RDRAM_ARG PTR(PTR(OSThread)) queue_, PTR(OSThread) t_) {
+     debug_printf("[Thread Queue] Removing thread %d from queue 0x%08X\n", TO_PTR(OSThread, t_)->id, (uintptr_t)queue_);
+ 
+-    PTR(PTR(OSThread)) cur = queue_;
+-    while (cur != NULLPTR) {
+-        PTR(OSThread)* cur_ptr = queue_to_ptr(PASS_RDRAM queue_);
+-        if (*cur_ptr == t_) {
+-            *cur_ptr = TO_PTR(OSThread, *cur_ptr)->next;
++    // Keep the address of the link that names the current node. The link
++    // starts at the queue head, then advances through each node's next field.
++    PTR(OSThread)* link = queue_to_ptr(PASS_RDRAM queue_);
++    while (*link != NULLPTR) {
++        OSThread* current = TO_PTR(OSThread, *link);
++        if (*link == t_) {
++            *link = current->next;
+             return true;
+         }
+-        cur = TO_PTR(OSThread, *cur_ptr)->next;
++        link = &current->next;
+     }
+ 
+     return false;

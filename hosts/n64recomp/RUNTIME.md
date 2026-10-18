@@ -146,3 +146,38 @@ gopher64 src/device/controller.rs:20-21,45-55. URLs:
 https://github.com/DragonMinded/libdragon/blob/trunk/include/joybus.h#L208
 https://github.com/gopher64/gopher64/blob/main/src/device/controller.rs#L20
 The earlier doubled-duration correction did not itself resolve the SI stall.
+
+
+## CPU service boundary and timing model
+
+Every generated function entry services pending external interrupts and lets a
+higher-priority guest thread run. Nested `__osDisableInt` / `__osRestoreInt`
+regions defer this added service until interrupts are restored. Runtime SDK
+message operations retain their existing blocking semantics.
+
+The required profile fact `cpu.native_time_scale` defines a diagnostic ratio of
+guest CPU duration to native thread CPU time. Count/VI/timers continue using the
+runtime clock; pacing keeps guest work from executing arbitrarily far ahead of
+those devices. The host charges thread CPU time, never wall time spent blocked
+or running another guest thread. It accumulates sub-100us debt and pays it in
+100us sleeps with interrupt service between sleeps. Host scheduler and pacing
+work are excluded from the next charge. CPU-clock failure is fatal.
+
+The scale is an explicit approximation, not an instruction/cycle-accurate model
+or a hardware calibration. Native compiler/CPU and function granularity remain
+limitations for timing-sensitive conclusions. No game-specific branch, address,
+state repair, or guest source mutation is involved. The old experimental
+N64R_CPU_SCALE and N64R_CPU_NOPREEMPT switches are not read.
+
+Apply the maintained runtime thread-queue removal patch before building. The
+idle-until-interrupt experiment is not required and is not part of this host.
+
+
+Canonical acceptance: run `20261018T152220584093Z` used profile scale2.5,
+no function/queue tracing, and the original guest. Graphics tasks advanced
+2308 at90s -> 2908 at110s -> 3800 at140s; all13 checkpoint images differed.
+Viewed90s/102s captures show first-person gameplay, and140s shows the ordinary
+mission-failed results after two deaths. The baseline froze at character
+selection with1767 tasks. Queue removal alone and entry service alone did not
+remove that freeze; both the queue correction and paced guest CPU service are
+needed by this measured route. The full suite passed143 tests.

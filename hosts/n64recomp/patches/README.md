@@ -35,3 +35,16 @@ conditional branches, and ucode changes that it cannot resolve statically.
 
 Sources: https://github.com/gonetz/GLideN64/blob/master/src/uCodes/F3DEX2ACCLAIM.cpp
 and https://github.com/gonetz/GLideN64/blob/master/src/uCodes/F3DEX2.cpp .
+
+# Runtime thread queue removal
+
+Pin: `cdf5abbd5026fef5c364c676e4667c45e42b6863`.
+Apply `n64modernruntime-thread-queue-remove.diff` in that runtime checkout.
+Removal must advance the pointer to the current link, including links inside
+thread records. The previous loop repeatedly inspected the queue head, so
+reprioritizing a non-head thread could reinsert a still-linked node and corrupt
+the ready queue. With entry preemption and paced execution this stranded main
+before its first graphics task. The patch is generic and changes no guest code.
+
+`tests/test_runtime_thread_queue.py` applies this patch to the tiny pinned source
+fixture and checks ready and blocked queues, including repeated reprioritization.

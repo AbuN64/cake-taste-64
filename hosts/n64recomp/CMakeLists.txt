@@ -39,6 +39,10 @@ else()
   set(_rt64_src ${rt64_SOURCE_DIR})
 endif()
 
+include(${CMAKE_CURRENT_SOURCE_DIR}/require_runtime_patch.cmake)
+n64host_require_runtime_patch("${_rt_src}"
+  "${CMAKE_CURRENT_SOURCE_DIR}/patches/n64modernruntime-thread-queue-remove.diff")
+
 # Functions N64Recomp refused or ignored have no body; give them logging stubs so the rest links.
 # N64R_REFUSED is an optional TSV (header line, then name<TAB>reason).
 set(_stub_c "#include \"recomp.h\"\nvoid n64host_unimplemented(const char*);\n")
@@ -89,8 +93,10 @@ execute_process(COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/boot_p
   ${N64R_PROFILE} ${CMAKE_BINARY_DIR}/gen/boot_profile.h COMMAND_ERROR_IS_FATAL ANY)
 execute_process(COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/input_profile.py
   ${N64R_PROFILE} ${CMAKE_BINARY_DIR}/gen/host_input_profile.h COMMAND_ERROR_IS_FATAL ANY)
+execute_process(COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/cpu_profile.py
+  ${N64R_PROFILE} ${CMAKE_BINARY_DIR}/gen/cpu_profile.h COMMAND_ERROR_IS_FATAL ANY)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-  ${N64R_PROFILE} ${N64R_REFUSED} ${CMAKE_CURRENT_SOURCE_DIR}/boot_profile.py ${CMAKE_CURRENT_SOURCE_DIR}/input_profile.py)
+  ${N64R_PROFILE} ${N64R_REFUSED} ${CMAKE_CURRENT_SOURCE_DIR}/boot_profile.py ${CMAKE_CURRENT_SOURCE_DIR}/input_profile.py ${CMAKE_CURRENT_SOURCE_DIR}/cpu_profile.py)
 set(NFD_PORTAL ON CACHE BOOL "" FORCE)  # dbus portal; avoids a GTK3 dependency
 set(RT64_STATIC ON CACHE BOOL "" FORCE)
 set(RT64_SDL_WINDOW_VULKAN ON CACHE BOOL "" FORCE)
@@ -100,7 +106,7 @@ add_subdirectory(${_rt64_src} rt64)
 
 file(GLOB GEN_FUNCS CONFIGURE_DEPENDS ${N64R_GEN_DIR}/funcs/*.c)
 add_executable(n64host
-  main.cpp render_rt64.cpp audio_sdl.cpp input_sdl.cpp libultra_gaps.c addrmap.c cop0_adapter.c pi_adapter.cpp vi_adapter.cpp tlb_adapter.c si_adapter.cpp si_timing.cpp queue_trace.cpp
+  main.cpp render_rt64.cpp audio_sdl.cpp input_sdl.cpp libultra_gaps.c addrmap.c cop0_adapter.c pi_adapter.cpp vi_adapter.cpp tlb_adapter.c si_adapter.cpp si_timing.cpp queue_trace.cpp cpu_scheduler.cpp cpu_clock.cpp
   ${CMAKE_BINARY_DIR}/gen/refused_stubs.c
   ${GEN_FUNCS} ${N64R_GEN_DIR}/rsp/rsp_audio.cpp)
 set_source_files_properties(${GEN_FUNCS} PROPERTIES COMPILE_OPTIONS "-w;-O1")
@@ -118,4 +124,5 @@ target_link_options(n64host PRIVATE -Wl,--wrap=cop0_status_write
   -Wl,--wrap=osRecvMesg_recomp -Wl,--wrap=osSendMesg_recomp
   -Wl,--wrap=osCreateMesgQueue_recomp -Wl,--wrap=osContStartQuery_recomp
   -Wl,--wrap=osContStartReadData_recomp -Wl,--wrap=osContGetQuery_recomp
+  -Wl,--wrap=__osDisableInt_recomp -Wl,--wrap=__osRestoreInt_recomp
   -Wl,--wrap=switch_error -Wl,--wrap=osAiGetStatus_recomp -Wl,--wrap=osAiSetNextBuffer_recomp)

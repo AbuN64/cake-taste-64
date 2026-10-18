@@ -21,7 +21,10 @@
 size_t n64host_rom_size;
 
 // ---- probes -------------------------------------------------------------
+extern "C" void n64host_cpu_tick();
+extern uint8_t *n64host_rdram;
 extern "C" void n64host_trace(const char *name) {
+    n64host_cpu_tick();
     static FILE *f = [] { const char *p = std::getenv("N64R_TRACE"); FILE *h = p ? std::fopen(p, "w") : nullptr; if (h) setvbuf(h, nullptr, _IOLBF, 0); return h; }();
     if (!f) return;
     static std::atomic<unsigned> frame{0};
@@ -83,6 +86,7 @@ void configure_context(uint8_t *, recomp_context *ctx) {
     cop0_status_write(ctx, HOST_INITIAL_STATUS);
 }
 void entry(uint8_t *rdram, recomp_context *ctx) {
+    n64host_rdram = rdram;
     configure_context(rdram, ctx);
     // The runtime resolves thread entry points by guest address; a pointer into a mapped KUSEG window
     // names the same function as its KSEG0 label, so register those aliases with the runtime.
