@@ -18,6 +18,7 @@ _OPTIONAL = {
     "rsp_audio",
     "functions_per_output_file",
     "max_refusals",
+    "symbol_names",
 }
 
 
@@ -40,6 +41,10 @@ class Settings:
     rsp_function: str | None
     functions_per_output_file: int
     max_refusals: int
+    symbol_names: dict[str, dict[int, str]]
+
+    def names_for(self, version: str) -> dict[int, str]:
+        return self.symbol_names.get(version, {})
 
     def layout_files(self, version: str) -> list[Path]:
         found = sorted(self.decomp_root.glob(self.layout_glob.format(version=version)))
@@ -94,6 +99,16 @@ def load(profile: Any) -> Settings:
     include = raw.get("recomp_include")
     if include is not None and not isinstance(include, str):
         raise TasteError("config.schema", "recomp.recomp_include: expected a string")
+    names = raw.get("symbol_names", {})
+    if not isinstance(names, dict) or not all(
+        isinstance(v, dict) and all(isinstance(a, str) and isinstance(n, str) and n for a, n in v.items())
+        for v in names.values()
+    ):
+        raise TasteError("config.schema", "recomp.symbol_names: expected version to {address: name} objects")
+    try:
+        symbol_names = {str(ver): {int(a, 0): n for a, n in m.items()} for ver, m in names.items()}
+    except ValueError as error:
+        raise TasteError("config.schema", f"recomp.symbol_names: bad address ({error})") from error
     return Settings(
         decomp_root=profile.resolve_path(raw["decomp_root"]),
         layout_glob=raw["layout_glob"],
@@ -112,4 +127,5 @@ def load(profile: Any) -> Settings:
         rsp_function=rsp["function"] if rsp else None,
         functions_per_output_file=per_file,
         max_refusals=refusals,
+        symbol_names=symbol_names,
     )

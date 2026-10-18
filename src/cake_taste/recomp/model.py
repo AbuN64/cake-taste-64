@@ -23,9 +23,13 @@ class Section:
 
 
 def build_sections(
-    layout: Layout, asm_dir: Path, symbols_file: Path, rom_size: int | None = None
+    layout: Layout,
+    asm_dir: Path,
+    symbols_file: Path,
+    rom_size: int | None = None,
+    overrides: dict[int, str] | None = None,
 ) -> tuple[list[Section], dict[str, int]]:
-    names = read_symbol_names(symbols_file)
+    names = {**read_symbol_names(symbols_file), **(overrides or {})}
     ordered = sorted(layout.segments, key=lambda s: s.start)
     spans = [(s, layout.extent(s, rom_size)) for s in ordered if s.vram is not None]
     grouped: dict[str, list[Function]] = {s.name: [] for s, _ in spans}
