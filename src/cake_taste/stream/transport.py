@@ -7,6 +7,8 @@ import re
 import subprocess
 from typing import Any
 
+from . import browser
+
 
 def settings(stream: dict[str, Any]) -> dict[str, Any]:
     if stream.get("transport") != "moonlight":
@@ -27,6 +29,8 @@ def change(stream: dict[str, Any], action: str) -> dict[str, Any]:
     config = settings(stream)
     if action not in {"start", "stop"}:
         raise ValueError("transport action must be start or stop")
+    if action == "start" and "browser" in config:
+        browser.install(config["browser"], stream["up"]["output"])
     runtime = config["systemd_runtime_dir"]
     env = {**os.environ, "XDG_RUNTIME_DIR": runtime, "DBUS_SESSION_BUS_ADDRESS": "unix:path=" + runtime + "/bus"}
     units = config["units"] if action == "start" else list(reversed(config["units"]))

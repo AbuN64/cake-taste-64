@@ -18,7 +18,10 @@ from .supervise import FatalUnitExit, Group, RoleRunner, Unit
 
 
 def endpoint_url(up: dict[str, Any]) -> str:
-    return f"http://{up['public_host']}:{up['http_port']}/stream.html"
+    scheme = up.get("http_scheme", "http")
+    if scheme not in {"http", "https"}:
+        raise ValueError("stream URL scheme must be http or https")
+    return f"{scheme}://{up['public_host']}:{up['http_port']}/stream.html"
 
 
 def substitutions(profile: Any, up: dict[str, Any], run_dir: Path, display: str = "") -> dict[str, str]:
