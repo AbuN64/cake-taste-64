@@ -9,6 +9,7 @@ from typing import Any
 
 from cake_taste import TasteError
 
+from .bounded import bounded_probe
 from .probe import KINDS, probe
 from .runner import run_command
 
@@ -25,8 +26,8 @@ def run(profile: Any, argv: tuple[str, ...]) -> dict[str, Any]:
     task.add_argument("command", nargs=argparse.REMAINDER)
     commands.add_parser("status")
     shot = commands.add_parser("probe")
-    shot.add_argument("--kind", required=True, choices=KINDS)
-    shot.add_argument("--function", required=True)
+    shot.add_argument("--kind", required=True, choices=(*KINDS, "call"), help="call = bounded closure probe")
+    shot.add_argument("--function", help="name or address; a call request may name it instead")
     shot.add_argument("--range", dest="span")
     shot.add_argument("--frames", type=int)
     shot.add_argument("--input", required=True, type=Path)
@@ -35,7 +36,11 @@ def run(profile: Any, argv: tuple[str, ...]) -> dict[str, Any]:
         config = profile.section("repro")
         path = profile.resolve_path(config["status_path"])
         return {"path": str(path), "status": json.loads(path.read_text()) if path.is_file() else None}
+    if args.action == "probe" and args.kind == "call":
+        return bounded_probe(profile, function=args.function, script=args.input)
     if args.action == "probe":
+        if not args.function:
+            raise TasteError("repro.function", f"probe {args.kind} needs --function")
         return probe(
             profile, kind=args.kind, function=args.function, script=args.input, frames=args.frames, span=args.span
         )
