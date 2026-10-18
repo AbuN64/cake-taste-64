@@ -1,6 +1,8 @@
 // RT64 RendererContext. Generic: knows nothing about any game.
 #include <SDL.h>
 #include <cstring>
+#include <cstdio>
+#include <chrono>
 #include "host.h"
 #include "microcode_guard.h"
 #include "ultramodern/renderer_context.hpp"
@@ -56,13 +58,28 @@ public:
             app_->interpreter->hleGBI->ucode != RT64::GBIUCode::Unknown,
             task->t.ucode, task->t.ucode_data);
         app_->processDisplayLists(app_->core.RDRAM, task->t.data_ptr & 0x3FFFFFF, 0, true);
+        ++tasks_;
+        if (tasks_ == 1 || tasks_ % 600 == 0)
+            std::fprintf(stderr, "n64host: graphics tasks=%llu elapsed_ms=%lld dl=0x%08X bytes=%u\n",
+                (unsigned long long)tasks_, elapsed_ms(), task->t.data_ptr, task->t.data_size);
     }
     void send_dummy_workload(uint32_t) override {}
-    void update_screen() override { app_->updateScreen(); }
+    void update_screen() override {
+        app_->updateScreen();
+        ++screens_;
+        if (screens_ == 1 || screens_ % 600 == 0)
+            std::fprintf(stderr, "n64host: screen updates=%llu elapsed_ms=%lld graphics_tasks=%llu\n",
+                (unsigned long long)screens_, elapsed_ms(), (unsigned long long)tasks_);
+    }
     void shutdown() override { if (app_) app_->end(); }
     uint32_t get_display_framerate() const override { return 60; }
     float get_resolution_scale() const override { return 1.0f; }
 private:
+    uint64_t tasks_ = 0, screens_ = 0;
+    const std::chrono::steady_clock::time_point started_ = std::chrono::steady_clock::now();
+    long long elapsed_ms() const {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started_).count();
+    }
     uint32_t dummy_ = 0;
     std::unique_ptr<RT64::Application> app_;
 };

@@ -36,12 +36,19 @@ RspExitReason rsp_audio(uint8_t* rdram, uint32_t ucode_addr);
 namespace {
 SDL_Window *g_window;
 void *create_gfx() {
-    SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER);
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) != 0) {
+        std::fprintf(stderr, "n64host: SDL initialization failed: %s\n", SDL_GetError());
+        std::exit(3);
+    }
     return nullptr;
 }
 ultramodern::renderer::WindowHandle create_window(void *) {
-    g_window = SDL_CreateWindow("n64host", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 1280, 960,
+    g_window = SDL_CreateWindow("n64host", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 960, 540,
                                 SDL_WINDOW_RESIZABLE | SDL_WINDOW_VULKAN);
+    if (!g_window) {
+        std::fprintf(stderr, "n64host: window creation failed: %s\n", SDL_GetError());
+        std::exit(3);
+    }
     return g_window;
 }
 void update_gfx(void *) {
