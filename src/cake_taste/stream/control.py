@@ -1,4 +1,4 @@
-"""Control surface for running roles: restart, stop and send keys, callable by the lane that owns each role."""
+"""Control surface for running roles: restart, stop and send keys, one call per role."""
 
 from __future__ import annotations
 

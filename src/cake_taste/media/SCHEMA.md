@@ -19,5 +19,5 @@ The one-time import copies historical `catalog.json` and `index.html` bytes
 without republishing. It copies every referenced SHA-named blob, verifies all
 catalog references, bytes, and hashes through readback, preserves file mtimes
 with `copy2`, and atomically renames an absent staging directory into place. Existing IDs and timestamps are
-left untouched. The old live gallery must remain served until the root lane
-reviews a fresh manifest and switches the sole serving route.
+left untouched. The old live gallery must remain served until a fresh manifest has been
+reviewed and the sole serving route switches.
