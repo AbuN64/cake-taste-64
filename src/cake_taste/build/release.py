@@ -7,7 +7,9 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from .util import BuildFailure, atomic_json, digest_file, expand, run_gate, safe_relative
+from cake_taste.files import atomic_json, sha256_file
+
+from .util import BuildFailure, expand, run_gate, safe_relative
 
 
 def prepare(specs, variables, resolve_path):
@@ -35,7 +37,7 @@ def prepare(specs, variables, resolve_path):
                 raise BuildFailure(f"Release source is missing or a symlink: {source}")
             sources[str(target)] = source
             files[str(target)] = {
-                "sha256": digest_file(source),
+                "sha256": sha256_file(source),
                 "bytes": source.stat().st_size,
                 "mode": item.get("mode"),
             }
@@ -55,7 +57,7 @@ def prepare(specs, variables, resolve_path):
                     shutil.copy2(sources[relative], target, follow_symlinks=False)
                     if details["mode"] is not None:
                         target.chmod(details["mode"])
-                    if digest_file(target) != details["sha256"]:
+                    if sha256_file(target) != details["sha256"]:
                         raise BuildFailure(f"Release copy differs from proved input: {target}")
                 atomic_json(staging / "manifest.json", manifest)
                 os.rename(staging, destination)
@@ -64,7 +66,7 @@ def prepare(specs, variables, resolve_path):
                     shutil.rmtree(staging)
         for relative, details in files.items():
             target = destination / relative
-            if not target.is_file() or target.is_symlink() or digest_file(target) != details["sha256"]:
+            if not target.is_file() or target.is_symlink() or sha256_file(target) != details["sha256"]:
                 raise BuildFailure(f"Release readback failed: {target}")
         actual = {str(path.relative_to(destination)) for path in destination.rglob("*") if path.is_file()}
         if actual != set(files) | {"manifest.json"}:
@@ -135,7 +137,7 @@ def promote(prepared, variables, log_dir, on_step, ensure_current):
             if (item["root"] / "current").resolve(strict=True) != item["destination"]:
                 raise BuildFailure(f"Current release changed unexpectedly: {item['name']}")
             for relative, details in item["manifest"]["files"].items():
-                if digest_file(item["destination"] / relative) != details["sha256"]:
+                if sha256_file(item["destination"] / relative) != details["sha256"]:
                     raise BuildFailure(f"Activated release readback changed: {item['name']}/{relative}")
             ensure_current("post")
     except (BuildFailure, OSError) as failure:

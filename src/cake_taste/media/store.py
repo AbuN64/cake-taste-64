@@ -7,29 +7,9 @@ import shutil
 import tempfile
 from pathlib import Path, PurePosixPath
 
+from cake_taste.files import sha256_file
+
 MEDIA_SUFFIXES = {".png", ".jpg", ".jpeg", ".mp4", ".webm"}
-
-
-def digest_file(path):
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for block in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
-def atomic_bytes(path, data):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix=".write-", dir=path.parent)
-    try:
-        with os.fdopen(fd, "wb") as stream:
-            stream.write(data)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
 
 
 def asset_path(root, relative):
@@ -77,7 +57,7 @@ def audit(root, require_index=True):
     entries = []
     for relative, expected in sorted(refs.items()):
         path = asset_path(root, relative)
-        if not path.is_file() or digest_file(path) != expected:
+        if not path.is_file() or sha256_file(path) != expected:
             raise ValueError(f"Missing or changed media blob: {relative}")
         entries.append({"path": relative, "bytes": path.stat().st_size, "sha256": expected})
     assets = root / "assets"
@@ -94,7 +74,7 @@ def audit(root, require_index=True):
     index = root / "index.html"
     if require_index and (not index.is_file() or index.is_symlink()):
         raise ValueError("Static index.html is missing")
-    index_sha = digest_file(index) if index.is_file() else None
+    index_sha = sha256_file(index) if index.is_file() else None
     manifest_data = "".join(f"{entry['path']}\t{entry['bytes']}\t{entry['sha256']}\n" for entry in entries).encode()
     return {
         "items": len(items),

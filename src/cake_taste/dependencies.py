@@ -26,13 +26,13 @@ class Dependency:
 
 DEPENDENCIES = {
     "unbake": Dependency(
-        "unbake", "unbake.cli", "https://github.com/AbuN64/cake-unbake-64", "4afa1f3ef1ec95182c6a22f9b9134563270992d8"
+        "unbake", "unbake.cli", "https://github.com/AbuN64/cake-unbake-64", "b25437c884c2803537d17f62fdc729ee205896db"
     ),
     "recipe": Dependency(
         "recipemaker",
         "recipemaker.cli",
         "https://github.com/AbuN64/recipe-maker-64",
-        "980c34c5ae6a8eca984ff131183a0287a7b07de0",
+        "ba2f659f027e7eba653d2bbfd94636a87ec45dcb",
     ),
 }
 

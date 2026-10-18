@@ -56,6 +56,15 @@ class ConfigTests(unittest.TestCase):
             profile.name = "modified"
         self.assertEqual(len(profile.digest), 64)
 
+    def test_recomp_trace_handoff_sections_are_accepted(self) -> None:
+        self.value["trace"] = {"platform": "linux", "work_list": "evidence/work.json"}
+        self.value["handoff"] = {"repo": "evidence", "tools": {"tool": "bin/tool"}}
+        self.value["recomp"] = {"steps": []}
+        profile = self.load()
+        self.assertEqual(profile.section("trace")["platform"], "linux")
+        self.assertEqual(profile.section("handoff")["tools"], {"tool": "bin/tool"})
+        self.assertEqual(profile.section("recomp"), {"steps": []})
+
     def test_unknown_missing_and_ill_typed_keys_fail(self) -> None:
         for key, value in (("schema_version", True), ("name", ""), ("build", []), ("tooling", None)):
             original = self.value[key]

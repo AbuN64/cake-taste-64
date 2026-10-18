@@ -1,11 +1,8 @@
 """Small, deterministic primitives shared by the build runner."""
 
-import hashlib
-import json
 import os
 import re
 import subprocess
-import tempfile
 from pathlib import Path, PurePosixPath
 
 VARIABLE = re.compile(r"\$\{([A-Za-z0-9_.-]+)\}")
@@ -50,30 +47,6 @@ def expand(value, variables):
     if isinstance(value, dict):
         return {key: expand(item, variables) for key, item in value.items()}
     return value
-
-
-def digest_file(path):
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
-def atomic_json(path, value):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            json.dump(value, stream, indent=2, ensure_ascii=False)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
 
 
 def safe_relative(value):

@@ -14,7 +14,7 @@ python3.13 -m venv /path/to/isolated-env
 /path/to/isolated-env/bin/taste dependencies
 ```
 
-Direct pins are Unbake `4afa1f3ef1ec95182c6a22f9b9134563270992d8` and Recipe Maker `980c34c5ae6a8eca984ff131183a0287a7b07de0`. The Unbake requirement exactly matches this Recipe Maker revision's requirement so the ordinary dependency resolver can resolve both. `taste dependencies` verifies each installed distribution's `direct_url.json`, Git commit and upstream URL, and Recipe Maker's matching Unbake requirement. There is no resolver bypass or source-tree import fallback.
+Direct pins are Unbake `b25437c884c2803537d17f62fdc729ee205896db` and Recipe Maker `ba2f659f027e7eba653d2bbfd94636a87ec45dcb`. The Unbake requirement exactly matches this Recipe Maker revision's requirement so the ordinary dependency resolver can resolve both. `taste dependencies` verifies each installed distribution's `direct_url.json`, Git commit and upstream URL, and Recipe Maker's matching Unbake requirement. There is no resolver bypass or source-tree import fallback.
 
 ## Project profile
 
@@ -33,7 +33,7 @@ Profiles are explicit JSON. Relative paths resolve against the profile file. Run
     "timeout_seconds": 300
   },
   "target": {
-    "adapter": "/work/cake-taste-64/adapters/project-adapter",
+    "adapter": "/configuration/project-adapter",
     "asset_ledger": "/evidence/taste/example-project/asset-ledger.json",
     "asset_observations": "/evidence/taste/example-project/asset-observations.jsonl"
   }
@@ -42,7 +42,7 @@ Profiles are explicit JSON. Relative paths resolve against the profile file. Run
 
 `tooling` is optional for build/display/media use. Direct Unbake or Recipe Maker commands require it; neither tool silently chooses a project, host, or timeout. `target.asset_ledger` identifies confirmed asset facts; `target.asset_observations` identifies rough steering and observations in JSONL. Neither is an invented Unbake runtime catalog API. Verified catalog changes cross to the owning source lane as evidence or reviewed patches.
 
-The known component sections are `build`, `media`, `panes`, `stream`, `logs`, `repro`, and `target`. Component owners validate their own section fields. Paths, binaries, service identities, ports, titles, timezone and game-specific fatal markers belong in those sections. Secrets, runtime state, media, ROMs and dependency binaries stay outside Git.
+The known component sections are `build`, `media`, `panes`, `stream`, `logs`, `repro`, `recomp`, `trace`, `handoff`, and `target`. Component owners validate their own section fields. Paths, binaries, service identities, ports, titles, timezone and game-specific fatal markers belong in those sections. Secrets, runtime state, media, ROMs and dependency binaries stay outside Git.
 
 ## Commands and public boundaries
 

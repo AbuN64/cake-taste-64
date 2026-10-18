@@ -79,7 +79,7 @@ class BuildPipelineTest(unittest.TestCase):
             commits[name] = commit(repo, f"initial {name}")
             repositories[name] = repo
         arena = root / "arena.pack"
-        ui = root / "frontend.pack"
+        ui = root / "data.pack"
         arena.write_bytes(b"arena bytes")
         ui.write_bytes(b"frontend bytes")
         build_script = (
@@ -106,7 +106,7 @@ class BuildPipelineTest(unittest.TestCase):
                         "name": "ui",
                         "path": str(ui),
                         "sha256": hashlib.sha256(ui.read_bytes()).hexdigest(),
-                        "filename": "frontend.pack",
+                        "filename": "data.pack",
                     },
                 ],
                 "commands": [
@@ -129,8 +129,8 @@ class BuildPipelineTest(unittest.TestCase):
                         "root": "${runtime_root}/releases/port",
                         "revision": "${commit.engine.short7}-${commit.adapter.short7}",
                         "files": [
-                            {"source": "output.port", "target": "ragewars"},
-                            {"source": "input.ui", "target": "data/frontend.pack"},
+                            {"source": "output.port", "target": "app"},
+                            {"source": "input.ui", "target": "data/data.pack"},
                         ],
                         "activate": [{"argv": [sys.executable, "-c", "print('port ready')"]}],
                     },
@@ -164,7 +164,7 @@ class BuildPipelineTest(unittest.TestCase):
             mtime = (source_root / "engine/source.c").stat().st_mtime_ns
             revision = commits["engine"][:7] + "-" + commits["adapter"][:7]
             for role, binary, asset in (
-                ("port", "ragewars", "frontend.pack"),
+                ("port", "app", "data.pack"),
                 ("experiment", "scene-probe", "arena.pack"),
             ):
                 current = profile.runtime_root / "releases" / role / "current"

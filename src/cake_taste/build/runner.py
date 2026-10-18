@@ -10,9 +10,11 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
+from cake_taste.files import atomic_json, sha256_file
+
 from .release import prepare, promote
 from .snapshot import sync_snapshot, verify_snapshot
-from .util import BuildFailure, atomic_json, digest_file, expand, run_gate, validate_identifiers
+from .util import BuildFailure, expand, run_gate, validate_identifiers
 
 
 def now():
@@ -34,7 +36,7 @@ class Runner:
             raise ValueError("build.sources and build.commands are required")
         validate_identifiers(self.config)
         self.profile_hash = profile.digest
-        if digest_file(Path(profile.source_file)) != self.profile_hash:
+        if sha256_file(Path(profile.source_file)) != self.profile_hash:
             raise BuildFailure("Loaded project profile bytes changed before build setup")
         workspace_value = self.config.get("workspace", str(Path(profile.runtime_root) / "build"))
         self.workspace = profile.resolve_path(workspace_value)
@@ -85,7 +87,7 @@ class Runner:
             }
             atomic_json(frozen_manifest, frozen)
             frozen_manifest.chmod(0o444)
-            manifest_hash = digest_file(frozen_manifest)
+            manifest_hash = sha256_file(frozen_manifest)
             verify_snapshot(source, frozen, protected)
             pinned[name] = {
                 "repo": str(repo),
@@ -120,7 +122,7 @@ class Runner:
             selected = self.path(spec["path"], variables).resolve(strict=True)
             if not selected.is_file() or selected.is_symlink() or not selected.stat().st_size:
                 raise BuildFailure(f"Input is missing, empty, or a symlink: {selected}")
-            digest = digest_file(selected)
+            digest = sha256_file(selected)
             if spec.get("sha256") and spec["sha256"] != digest:
                 raise BuildFailure(f"Pinned input hash differs: {name}")
             filename = spec.get("filename", selected.name)
@@ -129,7 +131,7 @@ class Runner:
             destination = run_dir / "inputs" / name / filename
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(selected, destination, follow_symlinks=False)
-            if digest_file(destination) != digest:
+            if sha256_file(destination) != digest:
                 raise BuildFailure(f"Input changed while frozen: {name}")
             frozen[name] = {
                 "source": str(selected),
@@ -153,7 +155,7 @@ class Runner:
             kind = spec["kind"]
             if kind == "file_sha256":
                 path = self.path(spec["path"], variables)
-                if digest_file(path) != spec["sha256"]:
+                if sha256_file(path) != spec["sha256"]:
                     raise BuildFailure(f"File hash check failed: {spec['name']}")
             elif kind == "git_archive":
                 repo = self.path(spec["repo"], variables)
@@ -176,7 +178,7 @@ class Runner:
                 raise BuildFailure(f"Unknown build check kind: {kind}")
 
     def verify_current(self, record, variables, switched_roots=()):
-        if digest_file(Path(self.profile.source_file)) != self.profile_hash:
+        if sha256_file(Path(self.profile.source_file)) != self.profile_hash:
             raise BuildFailure("Project profile changed during gates")
         for name, item in record["sources"].items():
             repo = Path(item["repo"])
@@ -185,7 +187,7 @@ class Runner:
             if git(repo, "rev-parse", f"{item['commit']}^{{tree}}") != item["tree"]:
                 raise BuildFailure(f"Committed tree changed: {name}")
             manifest = Path(item["manifest"])
-            if digest_file(manifest) != item["manifest_sha256"]:
+            if sha256_file(manifest) != item["manifest_sha256"]:
                 raise BuildFailure(f"Frozen source manifest changed: {name}")
             frozen = json.loads(manifest.read_text())
             if (frozen.get("schema"), frozen.get("commit"), frozen.get("tree"), frozen.get("archive_sha256")) != (
@@ -203,9 +205,9 @@ class Runner:
             alias = Path(item["source_alias"])
             self_switched = any(alias.is_relative_to(Path(root) / "current") for root in switched_roots)
             current = self.path(item["configured_path"], variables)
-            if not self_switched and (current != Path(item["source"]) or digest_file(current) != item["sha256"]):
+            if not self_switched and (current != Path(item["source"]) or sha256_file(current) != item["sha256"]):
                 raise BuildFailure(f"Input version changed during gates: {name}")
-            if digest_file(Path(item["frozen"])) != item["sha256"]:
+            if sha256_file(Path(item["frozen"])) != item["sha256"]:
                 raise BuildFailure(f"Frozen input changed during gates: {name}")
         self.verify_checks("post", variables)
 
@@ -222,11 +224,11 @@ class Runner:
                 raise BuildFailure(f"Output missing or empty: {name}")
             if spec.get("executable") and not os.access(source, os.X_OK):
                 raise BuildFailure(f"Output is not executable: {name}")
-            digest = digest_file(source)
+            digest = sha256_file(source)
             destination = run_dir / "artifacts" / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, destination, follow_symlinks=False)
-            if digest_file(destination) != digest:
+            if sha256_file(destination) != digest:
                 raise BuildFailure(f"Staged output differs from built artifact: {name}")
             outputs[name] = {
                 "source": str(source),

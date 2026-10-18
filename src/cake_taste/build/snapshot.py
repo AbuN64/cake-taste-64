@@ -1,6 +1,5 @@
 """Maintain one private, stable source tree from a pinned Git commit archive."""
 
-import hashlib
 import io
 import json
 import os
@@ -9,6 +8,8 @@ import tarfile
 import tempfile
 import time
 from pathlib import Path, PurePosixPath
+
+from cake_taste.files import atomic_json, sha256_bytes, sha256_file
 
 
 def verify_snapshot(source_root, manifest, protected_top=()):
@@ -39,37 +40,12 @@ def verify_snapshot(source_root, manifest, protected_top=()):
             if path.is_symlink() or not path.is_file() or relative not in expected:
                 raise ValueError(f"Snapshot contains an unexpected file or symlink: {path}")
             item = expected[relative]
-            if file_sha256(path) != item["sha256"] or (path.stat().st_mode & 0o777) != item["mode"]:
+            if sha256_file(path) != item["sha256"] or (path.stat().st_mode & 0o777) != item["mode"]:
                 raise ValueError(f"Snapshot content or mode differs from committed archive: {path}")
             seen.add(relative)
     missing = set(expected) - seen
     if missing:
         raise ValueError(f"Snapshot is missing committed files: {sorted(missing)}")
-
-
-def sha256(data):
-    return hashlib.sha256(data).hexdigest()
-
-
-def file_sha256(path):
-    h = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            h.update(block)
-    return h.hexdigest()
-
-
-def atomic_json(path, value):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        "w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False
-    ) as stream:
-        temporary = Path(stream.name)
-        json.dump(value, stream, indent=2, sort_keys=True)
-        stream.write("\n")
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(temporary, path)
 
 
 def safe_member_path(name, protected_top=()):
@@ -99,7 +75,7 @@ def sync_snapshot(writer_repo, commit, source_root, manifest_path, protected_top
     archive = subprocess.run(
         ["git", "-C", str(writer_repo), "archive", "--format=tar", commit], check=True, capture_output=True
     ).stdout
-    archive_hash = sha256(archive)
+    archive_hash = sha256_bytes(archive)
     desired = {}
     directories = set()
     with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as tar:
@@ -111,7 +87,7 @@ def sync_snapshot(writer_repo, commit, source_root, manifest_path, protected_top
             if not member.isfile():
                 raise ValueError(f"Unsupported archive entry: {member.name}")
             data = tar.extractfile(member).read()
-            desired[str(name)] = {"sha256": sha256(data), "mode": member.mode & 0o777, "data": data}
+            desired[str(name)] = {"sha256": sha256_bytes(data), "mode": member.mode & 0o777, "data": data}
             directories.update(str(parent) for parent in name.parents if str(parent) != ".")
 
     removed = 0
@@ -120,7 +96,7 @@ def sync_snapshot(writer_repo, commit, source_root, manifest_path, protected_top
             continue
         path = source_root / name
         if path.exists():
-            if path.is_symlink() or not path.is_file() or file_sha256(path) != old["sha256"]:
+            if path.is_symlink() or not path.is_file() or sha256_file(path) != old["sha256"]:
                 raise ValueError(f"Prior snapshot file was modified outside sync: {path}")
             path.unlink()
             removed += 1
@@ -142,7 +118,7 @@ def sync_snapshot(writer_repo, commit, source_root, manifest_path, protected_top
         if path.exists():
             if path.is_symlink() or not path.is_file():
                 raise ValueError(f"Private source file conflicts with existing path: {path}")
-            current_hash = file_sha256(path)
+            current_hash = sha256_file(path)
             if current_hash == item["sha256"]:
                 if (path.stat().st_mode & 0o777) != item["mode"]:
                     path.chmod(item["mode"])
@@ -169,7 +145,8 @@ def sync_snapshot(writer_repo, commit, source_root, manifest_path, protected_top
         changed += 1
 
     files = {name: {key: value for key, value in item.items() if key != "data"} for name, item in desired.items()}
-    atomic_json(manifest_path, {"commit": commit, "archive_sha256": archive_hash, "files": files})
+    manifest = {"commit": commit, "archive_sha256": archive_hash, "files": files}
+    atomic_json(manifest_path, manifest, sort_keys=True, ensure_ascii=True)
     return {
         "commit": commit,
         "archive_sha256": archive_hash,

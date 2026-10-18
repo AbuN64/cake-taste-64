@@ -4,8 +4,10 @@ import argparse
 import json
 from pathlib import Path
 
+from cake_taste.files import atomic_bytes
+
 from .publish import publish, render_html
-from .store import atomic_bytes, audit, import_verified
+from .store import audit, import_verified
 
 
 class Parser(argparse.ArgumentParser):

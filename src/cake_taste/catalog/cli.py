@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from importlib.resources import files
 
 from cake_taste import TasteError
-from cake_taste.media.store import atomic_bytes
+from cake_taste.files import atomic_bytes
 
 
 class Parser(argparse.ArgumentParser):

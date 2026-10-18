@@ -12,7 +12,9 @@ from pathlib import Path
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
-from .store import MEDIA_SUFFIXES, atomic_bytes, digest_file
+from cake_taste.files import atomic_bytes, sha256_file
+
+from .store import MEDIA_SUFFIXES
 
 SOURCE_SUFFIXES = MEDIA_SUFFIXES | {".ppm"}
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".ppm"}
@@ -176,7 +178,7 @@ def publish(
             destination = root / relative
             if not destination.exists():
                 atomic_bytes(destination, output)
-            elif digest_file(destination) != output_hash:
+            elif sha256_file(destination) != output_hash:
                 raise ValueError(f"Published blob changed: {destination}")
             captured = datetime.fromtimestamp(source.stat().st_mtime, zone)
             if chosen_date:
@@ -207,5 +209,5 @@ def publish(
         "published": len(paths),
         "items": len(items),
         "root": str(root),
-        "catalog_sha256": digest_file(root / "catalog.json"),
+        "catalog_sha256": sha256_file(root / "catalog.json"),
     }
