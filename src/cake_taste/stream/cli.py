@@ -72,7 +72,13 @@ def status(profile: Any) -> dict[str, Any]:
         endpoints.append({"name": value["name"], "host": host, "port": port, "active": active})
     runtime = profile.resolve_path(config["runtime_dir"])
     display = str(config["wayland_display"])
+    url = None
+    if "up" in config:
+        from .up import endpoint_url
+
+        url = endpoint_url(config["up"])
     return {
+        "url": url,
         "wayland_socket": str(runtime / display),
         "wayland_socket_present": (runtime / display).is_socket(),
         "endpoints": endpoints,
@@ -89,9 +95,20 @@ def run(profile: Any, argv: tuple[str, ...]) -> dict[str, Any]:
     shot.add_argument("--seconds", type=int, default=8)
     shot.add_argument("--publish", action="store_true")
     commands.add_parser("status")
+    commands.add_parser("up")
+    role = commands.add_parser("role")
+    role.add_argument("--id", required=True)
     args = parser.parse_args(argv)
     if args.action == "serve":
         return serve(profile, args.name)
     if args.action == "capture":
         return capture(profile, args.kind, args.seconds, args.publish)
+    if args.action == "up":
+        from .up import up
+
+        return up(profile)
+    if args.action == "role":
+        from .up import run_role
+
+        return run_role(profile, args.id)
     return status(profile)
