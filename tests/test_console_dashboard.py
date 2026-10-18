@@ -1,6 +1,9 @@
 import json
 import unittest
+from dataclasses import replace
 from pathlib import Path
+
+from textual.widgets import Collapsible
 
 from cake_taste.logs.console import ConsoleApp, EvidenceRow
 from cake_taste.logs.dashboard_model import Dashboard, boot_model, mission_model
@@ -87,8 +90,10 @@ class ConsoleInteractionTests(unittest.IsolatedAsyncioTestCase):
         stop = next(row for row in full.rows if row.state == "stop")
 
         class Source:
+            current = stop
+
             def read(self):
-                return Dashboard(full.heading, full.summary, [stop, full.rows[-1]], stop.key)
+                return Dashboard(full.heading, full.summary, [self.current, full.rows[-1]], stop.key)
 
             def directories(self):
                 return set()
@@ -98,10 +103,20 @@ class ConsoleInteractionTests(unittest.IsolatedAsyncioTestCase):
             row = app.query_one(EvidenceRow)
             self.assertGreater(app.query_one("#summary").region.y, app.query_one("#heading").region.y)
             self.assertTrue(row.collapsed)
+            app.sources.current = replace(stop, details="New evidence", state="passed")
+            await app.refresh_sources()
+            await pilot.pause()
+            self.assertTrue(row.collapsed)
+            self.assertFalse(row.query_one(Collapsible.Contents).display)
+            self.assertTrue(row.has_class("passed"))
+            self.assertFalse(row.has_class("stop"))
             await pilot.press("enter")
             self.assertFalse(row.collapsed)
+            app.sources.current = replace(stop, details="Updated open evidence")
             await app.refresh_sources()
+            await pilot.pause()
             self.assertFalse(row.collapsed)
+            self.assertTrue(row.query_one(Collapsible.Contents).display)
             await pilot.click(f"#{row.id} CollapsibleTitle")
             self.assertTrue(row.collapsed)
             await pilot.press("space")

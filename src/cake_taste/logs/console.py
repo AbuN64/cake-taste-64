@@ -56,9 +56,10 @@ class EvidenceRow(Collapsible):
 
     def update_record(self, row: Row) -> None:
         if row != self.record:
+            self.remove_class(self.record.state)
+            self.add_class(row.state)
             self.record = row
             self.title = self.label(row)
-            self.set_classes(row.state)
             self.body.update(Text(row.details))
 
 
