@@ -90,12 +90,21 @@ def seed_layout(memory: Memory, layout: Any, rom: bytes) -> list[dict[str, int |
     for segment in layout.segments:
         if segment.vram is None or segment.overlay or not 0x80000000 <= segment.vram < 0xA0000000:
             continue
+        # Code symbols may use a KSEG0 label for a KUSEG execution window. Seed the
+        # physical location described by the profile, as the runtime DMA does.
+        address = segment.vram
+        alias = address & 0x7FFFFFFF
+        window = next((t for t in memory.tlb if 0 <= alias - t["vaddr"] < t["size"]), None)
+        physical = window["paddr"] + alias - window["vaddr"] if window else address & 0x1FFFFFFF
+        if window:
+            address = alias
         size = layout.extent(segment, len(rom))
-        size = min(size, len(memory.data) - (segment.vram & 0x1FFFFFFF), len(rom) - segment.start)
+        size = min(size, len(memory.data) - physical, len(rom) - segment.start)
         if size <= 0:
             continue
-        memory.write(segment.vram, rom[segment.start : segment.start + size])
-        loaded.append({"name": segment.name, "vram": segment.vram, "rom": segment.start, "size": size})
+        memory.write(address, rom[segment.start : segment.start + size])
+        loaded.append({"name": segment.name, "vram": segment.vram, "physical": physical,
+                       "rom": segment.start, "size": size})
     return loaded
 
 

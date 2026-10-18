@@ -102,6 +102,14 @@ class MemoryTests(unittest.TestCase):
         assert [item["name"] for item in loaded] == ["code", "data"]
         assert memory.read(0x80000100, 16) == rom[16:32] and memory.read(0x80000200, 16) == rom[48:64]
 
+    def test_layout_seeds_profile_execution_alias_at_its_physical_location(self):
+        memory = bounded.Memory(0x400, [{"vaddr": 0x200000, "paddr": 0x100, "size": 0x100}])
+        layout = Layout("x", (Segment("code", "code", 0, 0x80200040, 16),))
+        loaded = bounded.seed_layout(memory, layout, bytes(range(16)))
+        assert loaded[0]["physical"] == 0x140
+        assert memory.read(0x200040, 16) == bytes(range(16))
+        assert memory.read(0x80000040, 16) == bytes(16)
+
     def test_registers_aliases_sign_extension_and_floats(self):
         regs = bounded.registers({"registers": {"a0": "0x80600000", "f12": {"f32": 1.0}, "status": 1}}, 0x803FFFC0)
         assert regs["r4"] == 0xFFFFFFFF80600000 and regs["r29"] == 0xFFFFFFFF803FFFC0
