@@ -18,6 +18,7 @@ from .model import Section, boot_segment, build_sections, flat_image, symbols_to
 from .settings import Settings
 from .splat import Layout, parse_layout
 from .supplement import read_sections
+from .indirect import hooks as indirect_hooks
 
 _FAILED = re.compile(r"^(?:Error recompiling|Failed to analyze) (\S+?),?$")
 
@@ -103,6 +104,10 @@ def config_toml(settings: Settings, version: str, entry: int | None, ignored: li
     if overlays:
         lines.append(f"relocatable_sections_path = {json.dumps(str(out / 'relocatable_sections.txt'))}")
     lines += ["", "[patches]", f"stubs = {_array(list(settings.stubs))}", f"ignored = {_array(ignored)}", ""]
+    facts = settings.local_indirect_jumps.get(version, [])
+    if facts:
+        _, sections, _ = build(settings, version)
+        lines += indirect_hooks(facts, [f for s in sections for f in s.functions], settings.rom(version).read_bytes())
     return "\n".join(lines)
 
 

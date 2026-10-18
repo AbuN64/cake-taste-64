@@ -21,6 +21,7 @@ _OPTIONAL = {
     "symbol_names",
     "function_sections",
     "function_sizes",
+    "local_indirect_jumps",
 }
 
 
@@ -48,6 +49,8 @@ class Settings:
     function_sections: dict[str, Path] = field(default_factory=dict)
 
     function_sizes: dict[str, dict[int, int]] = field(default_factory=dict)
+
+    local_indirect_jumps: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
 
     rsp_indirect_targets: tuple[int, ...] = ()
     rsp_execution_vram: int | None = None
@@ -169,6 +172,7 @@ def load(profile: Any) -> Settings:
         symbol_names=symbol_names,
         function_sections={str(v): profile.resolve_path(p) for v, p in sections.items()},
         function_sizes=function_sizes,
+        local_indirect_jumps=raw.get("local_indirect_jumps", {}),
         rsp_indirect_targets=tuple(targets),
         rsp_execution_vram=execution,
     )

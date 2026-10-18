@@ -62,3 +62,12 @@ memory indefinitely even though the later RDRAM capture contained a finite,
 valid 6474-command display list. After deferral, graphics continued beyond that
 point and exposed an independent missing original function at0x802ACBCC.
 The runtime pin is unchanged; the exact patch is mirrored under oracle/tools/patches.
+
+Sourced local computed branches
+-------------------------------
+`recomp.local_indirect_jumps[version]` lists `function`, `pc`, `targets`, and
+`source` facts for local branches the upstream analyser cannot recognize.
+Addresses identify original instructions. Generation validates every target
+inside its owning function, checks the original `jr` and its `nop` delay slot,
+and emits upstream function hooks with local labels. Unknown runtime targets
+fail through the existing switch diagnostic. Effectful delay slots are rejected.
