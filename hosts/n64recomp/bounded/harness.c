@@ -76,8 +76,6 @@ int main(int argc, char **argv) {
     while (fscanf(regs, "%31s %llx", key, &value) == 2) {
         int i;
         if (!strcmp(key, "entry")) entry = (uint32_t)value;
-        else if (!strcmp(key, "hi")) ctx.hi = value;
-        else if (!strcmp(key, "lo")) ctx.lo = value;
         else if (!strcmp(key, "status")) cop0_status_write(&ctx, (gpr)value);
         else if (key[0] == 'r' && sscanf(key + 1, "%d", &i) == 1 && i >= 0 && i < 32) *gpr_slot(&ctx, i) = (gpr)value;
         else if (key[0] == 'f' && sscanf(key + 1, "%d", &i) == 1 && i >= 0 && i < 32) fpr_slot(&ctx, i)->u64 = value;

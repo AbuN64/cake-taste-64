@@ -119,10 +119,9 @@ class MemoryTests(unittest.TestCase):
 
     def test_profile_register_defaults_and_request_override(self):
         regs = bounded.registers({"registers": {"a0": 9}}, 0x80000100,
-                                 {"status": "0x24000000", "a0": 3, "hi": -1, "lo": 8})
+                                 {"status": "0x24000000", "a0": 3})
         assert regs["status"] == 0x24000000 and regs["r4"] == 9
-        assert regs["hi"] == 0xFFFFFFFFFFFFFFFF and regs["lo"] == 8
-        for name in ("f32", "r32", "f999"):
+        for name in ("f32", "r32", "f999", "hi", "lo"):
             with self.assertRaises(TasteError):
                 bounded.registers({"registers": {name: 1}}, 0)
 

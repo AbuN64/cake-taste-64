@@ -138,7 +138,7 @@ def registers(request: dict[str, Any], default_sp: int, defaults: dict[str, Any]
             regs[key] = bits & 0xFFFFFFFFFFFFFFFF
         elif key.startswith("r") and key[1:].isdigit() and int(key[1:]) < 32:
             regs[key] = _int(value, f"registers.{name}")
-        elif key in {"status", "hi", "lo"}:
+        elif key == "status":
             regs[key] = _int(value, f"registers.{key}") & 0xFFFFFFFFFFFFFFFF
         else:
             raise TasteError("repro.request", f"registers.{name}: unknown register")
