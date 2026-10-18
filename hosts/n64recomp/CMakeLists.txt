@@ -87,8 +87,10 @@ file(WRITE ${CMAKE_BINARY_DIR}/gen/host_profile.h
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 execute_process(COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/boot_profile.py
   ${N64R_PROFILE} ${CMAKE_BINARY_DIR}/gen/boot_profile.h COMMAND_ERROR_IS_FATAL ANY)
+execute_process(COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/input_profile.py
+  ${N64R_PROFILE} ${CMAKE_BINARY_DIR}/gen/host_input_profile.h COMMAND_ERROR_IS_FATAL ANY)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-  ${N64R_PROFILE} ${N64R_REFUSED} ${CMAKE_CURRENT_SOURCE_DIR}/boot_profile.py)
+  ${N64R_PROFILE} ${N64R_REFUSED} ${CMAKE_CURRENT_SOURCE_DIR}/boot_profile.py ${CMAKE_CURRENT_SOURCE_DIR}/input_profile.py)
 set(NFD_PORTAL ON CACHE BOOL "" FORCE)  # dbus portal; avoids a GTK3 dependency
 set(RT64_STATIC ON CACHE BOOL "" FORCE)
 set(RT64_SDL_WINDOW_VULKAN ON CACHE BOOL "" FORCE)
@@ -112,4 +114,5 @@ target_link_libraries(n64host PRIVATE librecomp ultramodern rt64 ${SDL2_LIBRARIE
 target_compile_definitions(n64host PRIVATE HLSL_CPU FFX_GCC RT64_SDL_WINDOW_VULKAN IMGUI_IMPL_VULKAN_NO_PROTOTYPES)
 target_link_options(n64host PRIVATE -Wl,--wrap=cop0_status_write
   -Wl,--wrap=osSetEventMesg_recomp -Wl,--wrap=osPiRawStartDma_recomp
-  -Wl,--wrap=osCreateViManager_recomp)
+  -Wl,--wrap=osCreateViManager_recomp
+  -Wl,--wrap=osAiGetStatus_recomp -Wl,--wrap=osAiSetNextBuffer_recomp)

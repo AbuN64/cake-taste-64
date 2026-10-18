@@ -1,0 +1,128 @@
+{
+  "input": {
+    "keyboard_buttons": {
+      "D_UP": [
+        "Up"
+      ],
+      "D_DOWN": [
+        "Down"
+      ],
+      "D_LEFT": [
+        "Left"
+      ],
+      "D_RIGHT": [
+        "Right"
+      ],
+      "START": [
+        "Return"
+      ],
+      "A": [
+        "X"
+      ],
+      "B": [
+        "C"
+      ],
+      "Z": [
+        "Z",
+        "Left Shift"
+      ],
+      "L": [
+        "Q"
+      ],
+      "R": [
+        "E"
+      ],
+      "C_UP": [
+        "I"
+      ],
+      "C_LEFT": [
+        "J"
+      ],
+      "C_DOWN": [
+        "K"
+      ],
+      "C_RIGHT": [
+        "L"
+      ]
+    },
+    "keyboard_stick": {
+      "left": "A",
+      "right": "D",
+      "up": "W",
+      "down": "S"
+    },
+    "gamepad_buttons": {
+      "A": [
+        "a"
+      ],
+      "B": [
+        "b"
+      ],
+      "START": [
+        "start"
+      ],
+      "L": [
+        "leftshoulder"
+      ],
+      "R": [
+        "rightshoulder"
+      ],
+      "D_UP": [
+        "dpup"
+      ],
+      "D_DOWN": [
+        "dpdown"
+      ],
+      "D_LEFT": [
+        "dpleft"
+      ],
+      "D_RIGHT": [
+        "dpright"
+      ]
+    },
+    "gamepad_stick": {
+      "x": "leftx",
+      "y": "lefty",
+      "invert_y": true
+    },
+    "gamepad_axis_buttons": [
+      {
+        "axis": "lefttrigger",
+        "button": "Z",
+        "direction": 1,
+        "threshold": 0.5
+      },
+      {
+        "axis": "righttrigger",
+        "button": "Z",
+        "direction": 1,
+        "threshold": 0.5
+      },
+      {
+        "axis": "rightx",
+        "button": "C_LEFT",
+        "direction": -1,
+        "threshold": 0.5
+      },
+      {
+        "axis": "rightx",
+        "button": "C_RIGHT",
+        "direction": 1,
+        "threshold": 0.5
+      },
+      {
+        "axis": "righty",
+        "button": "C_UP",
+        "direction": -1,
+        "threshold": 0.5
+      },
+      {
+        "axis": "righty",
+        "button": "C_DOWN",
+        "direction": 1,
+        "threshold": 0.5
+      }
+    ],
+    "minimum_press_ms": 80
+  }
+}

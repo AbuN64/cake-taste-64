@@ -12,6 +12,7 @@
 #include "host.h"
 #include "host_profile.h"
 #include "boot_profile.h"
+#include "host_input_profile.h"
 #include "librecomp/overlays.hpp"
 #include "librecomp/rsp.hpp"
 #include "xxh3.h"
@@ -53,8 +54,11 @@ ultramodern::renderer::WindowHandle create_window(void *) {
 }
 void update_gfx(void *) {
     SDL_Event e;
-    while (SDL_PollEvent(&e))
+    while (SDL_PollEvent(&e)) {
         if (e.type == SDL_QUIT) ultramodern::quit();
+        n64host_input_event(e);
+    }
+    n64host_update_input();
 }
 RspUcodeFunc *get_ucode(const OSTask *task) {
     // type 2 = audio (M_AUDTASK); gfx tasks go to the renderer, not the RSP interpreter
@@ -142,6 +146,14 @@ int main(int argc, char **argv) {
     std::filesystem::create_directories(cdir);
     std::filesystem::copy_file(rom_path, cdir / g.stored_filename(), std::filesystem::copy_options::overwrite_existing);
 
+    std::printf("%s\n", host_controls);
+    std::fflush(stdout);
+    std::ofstream controls(cdir / "controls.txt");
+    controls << host_controls << "\n";
+    controls.close();
+    if (!controls) { std::fprintf(stderr, "n64host: cannot write controls.txt\n"); return 4; }
+
+    n64host_input_init(); // Validate all profile bindings before runtime threads exist.
     recomp::rsp::callbacks_t rsp_cb{get_ucode};
     ultramodern::gfx_callbacks_t gfx_cb{create_gfx, create_window, update_gfx};
     ultramodern::events::callbacks_t ev_cb{vi_cb, gfx_init_cb};
