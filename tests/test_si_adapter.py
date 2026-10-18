@@ -35,6 +35,9 @@ struct callbacks_t {
 #include "ultramodern/input.hpp"
 using namespace ultramodern::input;
 static unsigned events=0;
+static void (*pending)();
+void host_si_schedule(void (*callback)(),uint64_t) {assert(!pending);pending=callback;}
+
 static uint8_t ram[4096]={};
 extern "C" uint8_t *n64host_xlate_slow(uint8_t *r,uint32_t va) { return r+(va&0x1fffffff); }
 namespace ultramodern { void send_si_message() { ++events; } }
@@ -45,6 +48,13 @@ callbacks_t host_input_callbacks() {return {nullptr,get,nullptr,info};}
 extern "C" void __osSiRawStartDma_recomp(uint8_t*,recomp_context*);
 void put(unsigned n,unsigned v) {ram[(256+n)^3]=v;}
 unsigned byte(unsigned n) {return ram[(256+n)^3];}
+void transfer(recomp_context* ctx) {
+ unsigned before=events;
+ __osSiRawStartDma_recomp(ram,ctx);
+ assert(ctx->r2==0 && events==before && pending);
+ auto callback=pending;pending=nullptr;callback();
+ assert(events==before+1);
+}
 int main(int argc,char **argv) {
  recomp_context ctx{99,1,0x80000100};
  // Channel 0 query followed by a channel 1 query, including filler and end marker.
@@ -57,16 +67,16 @@ int main(int argc,char **argv) {
    if(!strcmp(argv[1],"command"))put(3,7);
    if(!strcmp(argv[1],"read"))ctx.r4=0;
  }
- __osSiRawStartDma_recomp(ram,&ctx);assert(ctx.r2==0 && events==1);
+ transfer(&ctx);assert(ctx.r2==0 && events==1);
  assert(byte(4)==0xcc); // write DMA must not overwrite the guest buffer
- ctx.r4=0;__osSiRawStartDma_recomp(ram,&ctx);
+ ctx.r4=0;transfer(&ctx);
  assert(events==2 && ctx.r2==0);
- assert(byte(4)==5 && byte(5)==0 && byte(6)==0);
+ assert(byte(4)==5 && byte(5)==0 && byte(6)==2);
  assert(byte(8)==0x83 && byte(10)==0xdd && byte(63)==0);
  // Raw controller read retains big-endian buttons and signed stick bytes.
  put(0,1);put(1,4);put(2,1);put(7,0xfe);put(63,1);
- ctx.r4=1;__osSiRawStartDma_recomp(ram,&ctx);
- ctx.r4=0;__osSiRawStartDma_recomp(ram,&ctx);
+ ctx.r4=1;transfer(&ctx);
+ ctx.r4=0;transfer(&ctx);
  assert(events==4 && byte(3)==0x90 && byte(4)==0 && byte(5)==12 && byte(6)==222);
 }
 """)

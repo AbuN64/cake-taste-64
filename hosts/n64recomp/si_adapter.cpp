@@ -10,37 +10,58 @@
 #include "addrmap.h"
 
 ultramodern::input::callbacks_t host_input_callbacks();
+void host_si_schedule(void (*)(), uint64_t);
 void convert_to_n64_range(float, float, int8_t&, int8_t&);
 namespace {
 std::mutex si_mutex;
-std::array<uint8_t, 64> pif{};
-bool have_request = false;
+std::array<uint8_t, 64> request{}, pif{};
+bool have_request = false, busy = false;
+uint8_t *pending_ram = nullptr;
+uintptr_t pending_physical = 0;
+uint32_t pending_direction = 0;
 [[noreturn]] void fail(const char *why) {
     std::fprintf(stderr, "n64host: raw SI DMA: %s\n", why);
-    std::exit(4);
+    std::fputs("n64host: PIF request=", stderr);
+    for (auto byte : request) std::fprintf(stderr, "%02x", byte);
+    std::fputc("\n"[0], stderr);
+    std::_Exit(4);
 }
-void execute() {
+uint8_t pak_crc(const uint8_t *bytes) {
+    // Remainder of the 256 data bits followed by eight zero bits, polynomial 0x185.
+    uint8_t remainder = 0;
+    for (unsigned i = 0; i < 32; ++i) {
+        remainder ^= bytes[i];
+        for (unsigned bit = 0; bit < 8; ++bit)
+            remainder = uint8_t((remainder << 1) ^ ((remainder & 0x80) ? 0x85 : 0));
+    }
+    return remainder;
+}
+unsigned execute() {
+    pif = request;
     if (pif[63] != 1) fail("unsupported PIF control byte");
     auto input = host_input_callbacks();
-    unsigned pos = 0, channel = 0;
+    unsigned pos = 0, channel = 0, active = 0;
     while (pos < 63) {
         unsigned tx = pif[pos];
         if (tx == 0xfe) break;
         if (tx == 0xff) { ++pos; continue; }
         if (tx == 0) { ++pos; ++channel; continue; }
+        // Older SDK packet structs can leave one alignment byte before END.
+        if (pos + 1 < 63 && pif[pos + 1] == 0xfe) break;
         if (tx > 63 || pos + 2 >= 63) fail("invalid PIF transmit length");
         unsigned rx = pif[pos + 1] & 63;
         if (!rx || pos + 2 + tx + rx > 63) fail("invalid PIF receive length");
         pif[pos + 1] = rx;
         auto device = input.get_connected_device_info(channel);
         const bool connected = device.connected_device == ultramodern::input::Device::Controller;
+        active += connected;
         unsigned command = pif[pos + 2], result = pos + 2 + tx;
         if (!connected) {
             pif[pos + 1] |= 0x80; // no response from this channel
         } else if (command == 0 || command == 0xff) {
             if (tx != 1 || rx != 3) fail("invalid controller status packet");
             pif[result] = 5; pif[result + 1] = 0;
-            pif[result + 2] = device.connected_pak != ultramodern::input::Pak::None;
+            pif[result + 2] = device.connected_pak == ultramodern::input::Pak::None ? 2 : 1;
         } else if (command == 1) {
             if (tx != 1 || rx != 4) fail("invalid controller read packet");
             uint16_t buttons = 0; float x = 0, y = 0; int8_t sx = 0, sy = 0;
@@ -50,7 +71,15 @@ void execute() {
             pif[result] = buttons >> 8; pif[result + 1] = buttons;
             pif[result + 2] = uint8_t(sx); pif[result + 3] = uint8_t(sy);
         } else if ((command == 2 || command == 3) && device.connected_pak == ultramodern::input::Pak::None) {
-            pif[pos + 1] |= 0x80;
+            // A connected controller answers even when its accessory is absent.
+            // The inverted data CRC triggers the SDK's status-query/error path.
+            if (command == 2) {
+                if (tx != 3 || rx != 33) fail("invalid accessory read packet");
+                pif[result + 32] = uint8_t(~pak_crc(pif.data() + result));
+            } else {
+                if (tx != 35 || rx != 1) fail("invalid accessory write packet");
+                pif[result] = uint8_t(~pak_crc(pif.data() + pos + 5));
+            }
         } else {
             fail("unsupported PIF device command");
         }
@@ -58,23 +87,46 @@ void execute() {
         ++channel;
     }
     pif[63] = 0;
+    return active;
 }
+void complete() {
+    {
+        std::lock_guard lock(si_mutex);
+        if (pending_direction == 1) {
+            for (unsigned i = 0; i < 64; ++i)
+                request[i] = pending_ram[pending_physical + (i ^ 3)];
+            have_request = true;
+        } else {
+            for (unsigned i = 0; i < 64; ++i)
+                pending_ram[pending_physical + (i ^ 3)] = pif[i];
+        }
+        busy = false;
+    }
+    ultramodern::send_si_message();
+}
+}
+extern "C" void __osSiDeviceBusy_recomp(uint8_t*, recomp_context *ctx) {
+    std::lock_guard lock(si_mutex);
+    ctx->r2 = busy;
 }
 extern "C" void __osSiRawStartDma_recomp(uint8_t *rdram, recomp_context *ctx) {
     const uint32_t direction = uint32_t(ctx->r4), address = uint32_t(ctx->r5);
     const uintptr_t physical = uintptr_t(n64host_xlate_slow(rdram, address)) - uintptr_t(rdram);
     if (direction > 1 || (physical & 7) || physical > HOST_RDRAM_SIZE - 64) fail("invalid transfer");
+    uint64_t duration_ns = 64000; // 6000 CPU cycles at 93.75 MHz for the write DMA.
     {
         std::lock_guard lock(si_mutex);
-        if (direction == 1) {
-            for (unsigned i = 0; i < 64; ++i) pif[i] = rdram[physical + (i ^ 3)];
-            execute();
-            have_request = true;
-        } else {
+        if (busy) { ctx->r2 = -1; return; }
+        busy = true;
+        pending_ram = rdram;
+        pending_physical = physical;
+        pending_direction = direction;
+        if (direction == 0) {
             if (!have_request) fail("read without a PIF request");
-            for (unsigned i = 0; i < 64; ++i) rdram[physical + (i ^ 3)] = pif[i];
+            const unsigned active = execute();
+            duration_ns = 256000 + 320000 * active; // PIF processing and active Joybus channels.
         }
     }
     ctx->r2 = 0;
-    ultramodern::send_si_message();
+    host_si_schedule(complete, duration_ns);
 }

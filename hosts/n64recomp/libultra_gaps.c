@@ -10,7 +10,6 @@ void n64host_unimplemented(const char *name) {
 GAP(osUnmapTLB_recomp) GAP(__osAiDeviceBusy_recomp) GAP(__osDpDeviceBusy_recomp)
 GAP(__osSpDeviceBusy_recomp) GAP(__osInsertTimer_recomp)
 // Device-state queries: report idle / no TLB match so callers proceed.
-void __osSiDeviceBusy_recomp(uint8_t* rdram, recomp_context* ctx) { n64host_unimplemented("__osSiDeviceBusy"); ctx->r2 = 0; }
 void __osProbeTLB_recomp(uint8_t* rdram, recomp_context* ctx) { n64host_unimplemented("__osProbeTLB"); ctx->r2 = (gpr)-1; }
 
 // Runtime exit() invokes destructors of still-running workers and obscures this diagnostic with SIGABRT.

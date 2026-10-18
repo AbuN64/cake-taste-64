@@ -90,3 +90,59 @@ to connect completion to result consumption. A blocked receive has an entry
 without a return. The trace reads guest memory and forwards every call unchanged;
 it does not synthesize completion or alter scheduling. Unset the trace path for
 normal runs. Invalid addresses or an unwritable trace destination fail explicitly.
+
+## Raw controller transactions
+
+Keep the original controller SDK family together when using the raw SI adapter.
+Its request buffer, last-command cache, accessory records and access queue are
+shared state; replacing individual members with host shortcuts loses that state
+and can remove the blocking transactions on which callers depend. Map the raw
+SI DMA boundary, not a mixture of original and host controller operations.
+The adapter stages each 64-byte write and executes the saved command on every
+read, so a repeated read samples fresh input even without a new write. Both
+directions deliver exactly one SI completion. Absent devices and accessories
+are reported in the PIF response for the original SDK to interpret.
+
+The old SDK accessory packet includes a trailing alignment byte before END.
+Ignore that byte when followed immediately by 0xFE. Captured motor-probe
+packet: dummy FF, tx35/rx1, command03, 32 data bytes, CRC, padding88, END.
+Independent facts-only comparison: Mupen64Plus src/device/pif/pif.c,
+setup_channels_format lines204-212, tolerates a byte immediately before END:
+https://github.com/mupen64plus/mupen64plus-core/blob/master/src/device/pif/pif.c#L204
+No reference implementation was copied. Fatal SI diagnostics print the bounded
+64-byte request and exit directly, without worker-destructor SIGABRT.
+
+SI admits one transfer, reports busy until completion, and rejects overlapping
+DMA with -1. Its worker waits on a condition variable and then performs the DMA
+and emits one SI event. Completion includes PIF processing time, not just the
+64-byte copy. The timing model uses 6000 CPU cycles for writes and 24000 plus
+30000 per active Joybus channel for reads (93.75 MHz CPU clock). This is a
+sourced hardware approximation, not a cycle-accurate claim. Facts-only sources:
+https://github.com/gopher64/gopher64/blob/main/src/device/si.rs#L59
+https://github.com/gopher64/gopher64/blob/main/src/device/pif.rs#L89
+The write timing cites https://github.com/rasky/n64-systembench hardware tests.
+The 0x900-tick legacy emulator approximation did not resolve the observed stall.
+No reference code was copied. SDK restoration alone was also insufficient.
+
+A controller with no Pak still responds to accessory commands. Return an
+inverted data CRC, not the no-controller response flag; this lets the original
+SDK perform its follow-up status query. CRC is the polynomial remainder for
+32 data bytes and eight trailing zero bits under polynomial0x185. Facts-only
+cross-check: gopher64 src/device/controller.rs:92-141 (absent accessory CRC
+inversion and polynomial), no source code copied.
+
+The source emulator stores CPU cycles internally and shifts that counter right
+once when exposing the COP0 Count register (gopher64 src/device/cop0.rs:258-259).
+Events use the unshifted counter (src/device/events.rs:27-31); CPU rate is
+93750000 (src/device/cpu.rs:222-223). Therefore write duration is64us and a
+one-controller read576us. The previous128us/1152us conversion doubled delays.
+Those are source timing facts only; no implementation was copied.
+
+A controller with an accessory port but no Pak reports identify status2, not0.
+Status0 means accessories unsupported; status1 means present. The same identify
+response applies to both status00 and resetFF. Protocol facts: libdragon
+include/joybus.h:208-231 (JOYBUS_IDENTIFY_STATUS_ACCESSORY_*), corroborated by
+gopher64 src/device/controller.rs:20-21,45-55. URLs:
+https://github.com/DragonMinded/libdragon/blob/trunk/include/joybus.h#L208
+https://github.com/gopher64/gopher64/blob/main/src/device/controller.rs#L20
+The earlier doubled-duration correction did not itself resolve the SI stall.
