@@ -17,6 +17,7 @@ from textual.widgets import Collapsible, Footer, Static
 
 from .dashboard_model import Dashboard, Row
 from .dashboard_sources import Sources
+from .terminal_driver import ConsoleDriver
 
 WATCH_MASK = 0x00000002 | 0x00000008 | 0x00000080 | 0x00000100 | 0x00000200
 
@@ -89,7 +90,7 @@ class ConsoleApp(App):
                 Binding("f7", "pause", "Pause retry", show=False)]
 
     def __init__(self, sources: Sources, supervisor=None):
-        super().__init__()
+        super().__init__(driver_class=ConsoleDriver)
         self.sources, self.supervisor = sources, supervisor
         self.widgets: dict[str, EvidenceRow] = {}
         self.watchers: dict[Path, int] = {}
