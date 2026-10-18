@@ -49,6 +49,8 @@ class Settings:
 
     function_sizes: dict[str, dict[int, int]] = field(default_factory=dict)
 
+    rsp_indirect_targets: tuple[int, ...] = ()
+
     def sizes_for(self, version: str) -> dict[int, int]:
         return self.function_sizes.get(version, {})
 
@@ -99,8 +101,14 @@ def load(profile: Any) -> Settings:
     if entry is not None and (type(entry) is not int or entry < 0 or entry & 3):
         raise TasteError("config.schema", "recomp.entrypoint: expected a word-aligned integer")
     rsp = raw.get("rsp_audio")
-    if rsp is not None and (not isinstance(rsp, dict) or set(rsp) != {"segment", "function"}):
-        raise TasteError("config.schema", "recomp.rsp_audio: expected {segment, function}")
+    if rsp is not None and (not isinstance(rsp, dict) or not {"segment", "function"} <= rsp.keys()
+                            or rsp.keys() - {"segment", "function", "extra_indirect_branch_targets", "source"}):
+        raise TasteError("config.schema", "recomp.rsp_audio: expected segment, function and optional sourced targets")
+    targets = rsp.get("extra_indirect_branch_targets", []) if rsp else []
+    if (not isinstance(targets, list)
+            or any(type(t) is not int or not 0x1000 <= t < 0x2000 or t & 3 for t in targets)
+            or len(targets) != len(set(targets)) or (targets and not rsp.get("source"))):
+        raise TasteError("config.schema", "recomp.rsp_audio targets must be unique aligned IMEM addresses with source")
     per_file = raw.get("functions_per_output_file", 1)
     refusals = raw.get("max_refusals", 100)
     if type(per_file) is not int or per_file < 1 or type(refusals) is not int or refusals < 0:
@@ -155,4 +163,5 @@ def load(profile: Any) -> Settings:
         symbol_names=symbol_names,
         function_sections={str(v): profile.resolve_path(p) for v, p in sections.items()},
         function_sizes=function_sizes,
+        rsp_indirect_targets=tuple(targets),
     )

@@ -8,7 +8,7 @@ from pathlib import Path
 from test_recomp import build
 
 from cake_taste import TasteError
-from cake_taste.recomp.generate import _reason, write_symbols
+from cake_taste.recomp.generate import _reason, _rsp, load_layout, write_symbols
 from cake_taste.recomp.settings import load
 from cake_taste.recomp.supplement import read_sections
 
@@ -60,6 +60,14 @@ class SupplementTests(unittest.TestCase):
             for override in ({0x80200400: 0x1004}, {0x80900000: 16}):
                 with self.assertRaises(TasteError):
                     write_symbols(replace(settings, function_sizes={"v1": override}), "v1")
+
+    def test_rsp_dispatch_targets_reach_recompiler_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            settings = replace(load(build(root)), rsp_indirect_targets=(0x1118, 0x12D0))
+            _rsp(settings, "v1", load_layout(settings, "v1"))
+            config = tomllib.loads((root / "gen/v1/rsp.toml").read_text())
+            self.assertEqual(config["extra_indirect_branch_targets"], [0x1118, 0x12D0])
 
     def test_refusal_keeps_the_concrete_cause(self):
         log = "No function found for jal target: 0x80600000\n"

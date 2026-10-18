@@ -247,6 +247,7 @@ def _rsp(settings: Settings, version: str, layout: Layout) -> dict[str, Any]:
             f"rom_file_path = {json.dumps(str(settings.rom(version)))}",
             f"output_file_path = {json.dumps(str(target))}",
             f"output_function_name = {json.dumps(settings.rsp_function)}",
+            f"extra_indirect_branch_targets = {list(settings.rsp_indirect_targets)}",
             "",
         ]
     )
