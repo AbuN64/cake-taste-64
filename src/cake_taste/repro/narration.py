@@ -7,6 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from cake_taste import TasteError
 from cake_taste.logs.events import append_event
 
 MATCH_STATES = ("matched-c", "stand-in", "unmatched", "missing", "unknown")
@@ -87,4 +88,9 @@ def narrated_probe(profile: Any, story: dict[str, Any], execute: Callable[[], di
         finding = "Original behavior characterized for decomp matching; " + outcome
     if finding:
         append_event(profile, "repro", "info", finding, evidence, kind="DECOMP", payload=payload)
+    if differences:
+        raise TasteError(
+            "repro.differences",
+            f"{outcome}; run: {result['run_id']}; receipt: {result['receipt']}",
+        )
     return result
