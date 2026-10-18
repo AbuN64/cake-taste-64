@@ -63,6 +63,11 @@ class ClosureTests(unittest.TestCase):
         assert 'probe_stub("far"); ctx->r2 = (gpr)(int64_t)-1;' in unit
         assert '{0x80001000u, root, "root"}' in unit and "osThing_recomp, " not in unit.split("probe_funcs")[1]
 
+    def test_target_cannot_succeed_as_a_stub(self):
+        for bodies, boundary in (({}, set()), ({"root": body("root")}, {"root"})):
+            with self.assertRaises(TasteError):
+                closure("root", bodies, boundary=boundary)
+
     def test_resolve_target_by_name_or_address(self):
         vrams = function_vrams(self.root / "symbols.toml")
         assert resolve_target("leaf", vrams) == "leaf" and resolve_target("0x80001020", vrams) == "far"
@@ -104,6 +109,38 @@ class MemoryTests(unittest.TestCase):
         with self.assertRaises(TasteError):
             bounded.registers({"registers": {"q9": 1}}, 0)
 
+    def test_profile_register_defaults_and_request_override(self):
+        regs = bounded.registers({"registers": {"a0": 9}}, 0x80000100,
+                                 {"status": "0x24000000", "a0": 3, "hi": -1, "lo": 8})
+        assert regs["status"] == 0x24000000 and regs["r4"] == 9
+        assert regs["hi"] == 0xFFFFFFFFFFFFFFFF and regs["lo"] == 8
+        for name in ("f32", "r32", "f999"):
+            with self.assertRaises(TasteError):
+                bounded.registers({"registers": {name: 1}}, 0)
+
+    def test_memory_rejects_negative_length_and_crossing_tlb_window(self):
+        memory = bounded.Memory(0x1000, [{"vaddr": 0x200000, "paddr": 0, "size": 16}])
+        for address, size in ((0x80000000, -1), (0x20000F, 2)):
+            with self.assertRaises(TasteError):
+                memory.read(address, size)
+
+    def test_source_fingerprint_and_stale_reference(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "reference.c"
+            path.write_text("field = input;\n")
+            profile = type("P", (), {"resolve_path": lambda self, value: Path(value)})()
+            source = {"path": str(path), "basis": "line 1: field copies input"}
+            checks = [{"reg": "v0", "expect": 7, "source": source}]
+            found = bounded.check_sources(checks, profile)
+            assert len(found) == 1 and len(found[0]["sha256"]) == 64
+            result = bounded.evaluate(checks, bounded.Memory(4, []), {"r2": 7})
+            assert result[0]["source"] == source
+            source["sha256"] = "0" * 64
+            with self.assertRaises(TasteError):
+                bounded.check_sources(checks, profile)
+            with self.assertRaises(TasteError):
+                bounded.check_sources([{"source": {"path": str(path)}}], profile)
+
     def test_changed_words_and_checks(self):
         before = bytes(8)
         after = b"\x00\x00\x00\x00" + struct.pack(">f", 0.1)
@@ -128,7 +165,8 @@ class BoundedProbeTests(unittest.TestCase):
             (gen / "funcs").mkdir(parents=True)
             (gen / "funcs" / "funcs_0.c").write_text(body("root", "leaf") + body("leaf"))
             (gen / "symbols.toml").write_text(SYMBOLS)
-            facts = {"version": "v1", "boot": {"rdram_size": 0x1000, "sp": 0x80000800}}
+            facts = {"version": "v1", "boot": {"rdram_size": 0x1000, "sp": 0x80000800,
+                                               "registers": {"status": 0x24000000}}}
             (root / "facts.json").write_text(json.dumps(facts))
             request = root / "request.json"
             request.write_text(json.dumps({
@@ -166,6 +204,7 @@ class BoundedProbeTests(unittest.TestCase):
             assert calls[0][0] == "cc" and any(part.endswith("closure.c") for part in calls[0])
             assert probe["closure"] == ["leaf", "root"] and probe["calls"] == 2
             assert probe["checked"] == 1 and probe["differences"] == 0 and probe["changed_words"] == 1
+            assert probe["registers_in"]["status"] == 0x24000000 and probe["unsourced_checks"] == 1
             assert (Path(result["receipt"]).parent / "probe.json").is_file()
             assert Path(probe["outputs"][1]["path"]).read_bytes() == struct.pack(">ii", 7, 9)
 

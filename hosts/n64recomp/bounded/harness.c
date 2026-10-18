@@ -76,6 +76,8 @@ int main(int argc, char **argv) {
     while (fscanf(regs, "%31s %llx", key, &value) == 2) {
         int i;
         if (!strcmp(key, "entry")) entry = (uint32_t)value;
+        else if (!strcmp(key, "hi")) ctx.hi = value;
+        else if (!strcmp(key, "lo")) ctx.lo = value;
         else if (!strcmp(key, "status")) cop0_status_write(&ctx, (gpr)value);
         else if (key[0] == 'r' && sscanf(key + 1, "%d", &i) == 1 && i >= 0 && i < 32) *gpr_slot(&ctx, i) = (gpr)value;
         else if (key[0] == 'f' && sscanf(key + 1, "%d", &i) == 1 && i >= 0 && i < 32) fpr_slot(&ctx, i)->u64 = value;
@@ -92,6 +94,7 @@ int main(int argc, char **argv) {
     for (int i = 0; i < 32; ++i) fprintf(out, "r%d 0x%016llx\n", i, (unsigned long long)*gpr_slot(&ctx, i));
     for (int i = 0; i < 32; ++i) fprintf(out, "f%d 0x%016llx\n", i, (unsigned long long)fpr_slot(&ctx, i)->u64);
     fprintf(out, "hi 0x%016llx\nlo 0x%016llx\n", (unsigned long long)ctx.hi, (unsigned long long)ctx.lo);
+    fprintf(out, "status 0x%08x\n", ctx.status_reg);
     fclose(out);
     snprintf(path, sizeof path, "%s/rdram.bin", argv[3]);
     out = fopen(path, "wb");

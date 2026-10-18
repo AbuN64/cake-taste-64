@@ -57,12 +57,12 @@ class Memory:
             pa = vaddr & 0x1FFFFFFF
         else:
             for item in self.tlb:
-                if 0 <= vaddr - item["vaddr"] < item["size"]:
+                if 0 <= vaddr - item["vaddr"] < item["size"] and vaddr + length <= item["vaddr"] + item["size"]:
                     pa = item["paddr"] + vaddr - item["vaddr"]
                     break
             else:
                 raise TasteError("repro.address", f"{vaddr:#010x} is not in KSEG0/KSEG1 or a profile TLB window")
-        if pa + length > len(self.data):
+        if length < 0 or pa < 0 or pa + length > len(self.data):
             raise TasteError("repro.address", f"{vaddr:#010x}+{length:#x} is past the {len(self.data):#x}-byte RDRAM")
         return pa
 
@@ -115,12 +115,12 @@ def _payload(item: dict[str, Any], index: int) -> bytes:
     return b"".join(struct.pack(code, _int(v, f"seed.memory[{index}]")) for v in values)
 
 
-def registers(request: dict[str, Any], default_sp: int) -> dict[str, int]:
+def registers(request: dict[str, Any], default_sp: int, defaults: dict[str, Any] | None = None) -> dict[str, int]:
     """Request register names (ABI or rN/fN) -> 64-bit values the harness loads."""
     regs = {"r29": default_sp & 0xFFFFFFFF}
-    for name, value in request.get("registers", {}).items():
+    for name, value in {**(defaults or {}), **request.get("registers", {})}.items():
         key = f"r{_ABI.index(name)}" if name in _ABI else name
-        if key.startswith("f") and key[1:].isdigit():
+        if key.startswith("f") and key[1:].isdigit() and int(key[1:]) < 32:
             if isinstance(value, dict) and set(value) in ({"f32"}, {"f64"}):
                 (kind, number), = value.items()
                 bits = struct.unpack(">I" if kind == "f32" else ">Q", struct.pack(_TYPES[kind], float(number)))[0]
@@ -129,8 +129,8 @@ def registers(request: dict[str, Any], default_sp: int) -> dict[str, int]:
             regs[key] = bits & 0xFFFFFFFFFFFFFFFF
         elif key.startswith("r") and key[1:].isdigit() and int(key[1:]) < 32:
             regs[key] = _int(value, f"registers.{name}")
-        elif key == "status":
-            regs[key] = _int(value, "registers.status")
+        elif key in {"status", "hi", "lo"}:
+            regs[key] = _int(value, f"registers.{key}") & 0xFFFFFFFFFFFFFFFF
         else:
             raise TasteError("repro.request", f"registers.{name}: unknown register")
     # A GPR holds the sign extension of its 32-bit value, as after any MIPS 32-bit load.
@@ -177,13 +177,33 @@ def evaluate(checks: list[dict[str, Any]], memory: Memory, regs: dict[str, int])
         if kind.startswith("f"):
             expect = struct.unpack(code, struct.pack(code, float(check["expect"])))[0]
             tolerance = float(check.get("tol", 0.0))
-            ok = (math.isnan(actual) and math.isnan(expect)) or abs(actual - expect) <= tolerance
+            ok = actual == expect or (math.isnan(actual) and math.isnan(expect)) or abs(actual - expect) <= tolerance
         else:
             expect = _int(check["expect"], f"checks[{index}].expect")
             ok = actual == expect
         results.append({"name": check.get("name", where), "at": where, "type": kind, "expect": expect,
-                        "actual": actual, "ok": ok})
+                        "actual": actual, "ok": ok, "source": check.get("source")})
     return results
+
+
+def check_sources(checks: list[dict[str, Any]], profile: Any) -> list[dict[str, Any]]:
+    """Validate and fingerprint cited files before execution; retain source locators in results."""
+    sources = {}
+    for index, check in enumerate(checks):
+        source = check.get("source")
+        if source is None:
+            continue
+        if not isinstance(source, dict) or not source.get("path") or not source.get("basis"):
+            raise TasteError("repro.request", f"checks[{index}].source needs path and basis")
+        path = profile.resolve_path(source["path"])
+        try:
+            digest = sha256_file(path)
+        except OSError as exc:
+            raise TasteError("repro.request", f"checks[{index}].source: {exc}") from exc
+        if source.get("sha256", digest) != digest:
+            raise TasteError("repro.request", f"checks[{index}].source hash changed: {path}")
+        sources[str(path)] = {"path": str(path), "sha256": digest}
+    return list(sources.values())
 
 
 def _config(profile: Any) -> dict[str, Any]:
@@ -220,6 +240,7 @@ def bounded_probe(profile: Any, *, function: str | None, script: Path) -> dict[s
     boot = facts.get("boot", {})
     if facts.get("version") not in (None, version) or "rdram_size" not in boot:
         raise TasteError("repro.facts", f"facts {config['facts']} do not describe {version} with boot.rdram_size")
+    sources = check_sources(request.get("checks", []), profile)
     gen = settings.out(version)
 
     vrams = function_vrams(gen / "symbols.toml")
@@ -227,7 +248,7 @@ def bounded_probe(profile: Any, *, function: str | None, script: Path) -> dict[s
     extra = tuple(resolve_target(str(name), vrams) for name in request.get("extra_functions", []))
     boundary = {resolve_target(str(name), vrams) for name in request.get("boundary", [])}
     stub_v0 = {resolve_target(str(k), vrams): _int(v, f"stub_v0.{k}") for k, v in request.get("stub_v0", {}).items()}
-    found = closure(target, index_bodies(gen / "funcs"), boundary=boundary, extra=extra,
+    found = closure(target, index_bodies(gen / "funcs"), boundary=boundary | stub_v0.keys(), extra=extra,
                     limit=int(request.get("max_functions", config.get("max_functions", 64))))
     unit = render_unit(found, vrams, settings.recomp_include or '#include "recomp.h"', settings.trace_mode, stub_v0)
 
@@ -238,15 +259,18 @@ def bounded_probe(profile: Any, *, function: str | None, script: Path) -> dict[s
     for index, item in enumerate(seed.get("memory", [])):
         memory.write(_int(item["addr"], f"seed.memory[{index}].addr"), _payload(item, index))
     before = bytes(memory.data)
-    regs_in = registers(request, _int(request.get("sp", boot.get("sp", 0x80400000)), "sp"))
+    regs_in = registers(request, _int(request.get("sp", boot.get("sp", 0x80400000)), "sp"),
+                        boot.get("registers", {}))
     regs_in["entry"] = vrams[target]
     regs_text = "".join(f"{k} 0x{v:x}\n" for k, v in sorted(regs_in.items()))
 
-    digest = hashlib.sha256(unit.encode() + regs_text.encode() + hashlib.sha256(before).digest()).hexdigest()[:16]
+    header = host_profile_header(boot)
+    digest = hashlib.sha256(unit.encode() + header.encode() + regs_text.encode()
+                            + hashlib.sha256(before).digest()).hexdigest()[:16]
     work = profile.resolve_path(config["work_root"]) / f"{target}-{digest}"
     work.mkdir(parents=True, exist_ok=True)
     atomic_bytes(work / "closure.c", unit.encode())
-    atomic_bytes(work / "host_profile.h", host_profile_header(boot).encode())
+    atomic_bytes(work / "host_profile.h", header.encode())
     atomic_bytes(work / "rdram.bin", host_order(before))
     atomic_bytes(work / "regs.txt", regs_text.encode())
 
@@ -302,6 +326,10 @@ def bounded_probe(profile: Any, *, function: str | None, script: Path) -> dict[s
         "frames": None,
         "range": None,
         "input_sha256": sha256_file(script),
+        "registers_in": regs_in,
+        "facts_sha256": sha256_file(profile.resolve_path(config["facts"])),
+        "check_sources": sources,
+        "unsourced_checks": sum(not c.get("source") for c in checks),
         "overlay": unit_summary(found),
         "env": {},
         "build_receipt": built["receipt"],

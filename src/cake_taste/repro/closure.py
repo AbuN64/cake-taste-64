@@ -82,6 +82,8 @@ def closure(
     limit: int = 64,
 ) -> Closure:
     """Breadth-first direct-call closure; boundary names and bodiless callees become stubs."""
+    if root in boundary or root not in bodies:
+        raise TasteError("repro.closure", f"target {root} must have a generated body and cannot be a stub")
     result = Closure(root)
     queue = [root, *extra]
     seen: set[str] = set()
