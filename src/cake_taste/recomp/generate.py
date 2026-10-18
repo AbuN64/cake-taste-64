@@ -7,6 +7,7 @@ import re
 import resource
 import shutil
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -26,9 +27,18 @@ def load_layout(settings: Settings, version: str) -> Layout:
     segments = tuple(s for layout in layouts for s in layout.segments)
     supplement = settings.function_sections.get(version)
     extra = read_sections(supplement) if supplement else ()
-    if {s.name for s in segments} & {s.name for s in extra}:
-        raise TasteError("recomp.sections", "supplement section name duplicates a layout segment")
-    return Layout(layouts[0].sha1, segments + extra)
+    base = Layout(layouts[0].sha1, segments)
+    merged = list(segments)
+    for section in extra:
+        existing = next((s for s in segments if s.name == section.name), None)
+        if existing is None:
+            merged.append(section)
+            continue
+        extent = base.extent(existing, settings.rom(version).stat().st_size)
+        if (existing.start, existing.vram, extent) != (section.start, section.vram, section.size):
+            raise TasteError("recomp.sections", f"supplement {section.name} disagrees with existing section mapping")
+        merged[merged.index(existing)] = replace(existing, options={**existing.options, **section.options})
+    return Layout(base.sha1, tuple(merged))
 
 
 def build(settings: Settings, version: str) -> tuple[Layout, list[Section], dict[str, int]]:

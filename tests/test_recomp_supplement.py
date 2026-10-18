@@ -37,6 +37,26 @@ class SupplementTests(unittest.TestCase):
             self.assertEqual(flat[extra["rom"]:extra["rom"] + 16], bytes(range(16)))
             self.assertEqual(result["functions"], 6)
 
+    def test_missing_entry_can_be_added_inside_an_existing_section(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            profile = build(root)
+            path = root / "sections.json"
+            row = {"name": "boot_code", "rom": 0x1000, "vram": 0x80200400, "size": 0x1000,
+                   "source": "fixture instruction boundaries", "functions": [
+                       {"name": "missing", "offset": 0x20, "size": 8}]}
+            path.write_text(json.dumps([row]))
+            settings = replace(load(profile), function_sections={"v1": path})
+            result = write_symbols(settings, "v1")
+            self.assertEqual(result["functions"], 6)
+            tables = tomllib.loads(Path(result["path"]).read_text())["section"]
+            boot = next(t for t in tables if t["name"] == "boot_code")
+            self.assertEqual(boot["functions"][-1], {"name": "missing", "vram": 0x80200420, "size": 8})
+            row["vram"] += 4
+            path.write_text(json.dumps([row]))
+            with self.assertRaises(TasteError):
+                write_symbols(settings, "v1")
+
     def test_invalid_boundaries_and_missing_source_fail(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "sections.json"
