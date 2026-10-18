@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .events import format_event
+from .events import canonical_kind, format_event
 
 _ADDRESS = re.compile(r"(?<![0-9a-fA-F])(?:0x)?(80[0-9a-fA-F]{6})(?![0-9a-fA-F])")
 _SOURCE = re.compile(r"(?:src/)?[A-Z_a-z][\w/.-]*\.(?:CPP|cpp|c|H|h|s)(?::\d+(?:-\d+)?)?")
@@ -60,7 +60,7 @@ def _evidence(events: list[dict], owner: str | None, revision: str, actual: str)
         else:
             state = "stand-in" if "NON_MATCHING" in message and "outside NON_MATCHING" not in message else "unknown"
             sources.extend(f"{source} [{state}]" for source in _SOURCE.findall(message))
-        if event.get("kind") == "COMMIT":
+        if canonical_kind(event) == "LAND":
             commits.append(message)
     lines.append("Probe: " + ("; ".join(dict.fromkeys(probes)) or "not recorded"))
     lines.append("Decomp: " + ("; ".join(dict.fromkeys(sources)) or "not recorded [unknown]"))

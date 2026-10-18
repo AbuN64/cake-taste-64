@@ -32,3 +32,4 @@ select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
 
 [tool.setuptools.package-data]
 "cake_taste.catalog" = ["page.html"]
+"cake_taste.logs" = ["event.schema.json"]

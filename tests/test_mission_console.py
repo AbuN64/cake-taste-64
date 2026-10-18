@@ -16,7 +16,7 @@ class Profile:
         self.root = root
 
     def section(self, name):
-        return {"events_path": "events.jsonl", "header_kinds": ["PORT-FAIL", "RUNG"]}
+        return {"events_path": "events.jsonl", "header_kinds": ["RUN-FAIL"]}
 
     def resolve_path(self, value):
         return self.root / value
@@ -27,15 +27,28 @@ class MissionConsoleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch.object(cli, "run_console") as console:
             root = Path(directory)
             cli.run(
-                Profile(root), ("console", "--kinds", "PORT-FAIL,PROBE,DECOMP,HANDOFF,COMMIT", "--host-log", "host.log")
+                Profile(root), ("console", "--kinds", "RUN-FAIL,PROBE,MATCH,HANDOFF,LAND", "--host-log", "host.log")
             )
             options = console.call_args.kwargs
-            self.assertEqual(options["kinds"], {"PORT-FAIL", "PROBE", "DECOMP", "HANDOFF", "COMMIT"})
+            self.assertEqual(options["kinds"], {"RUN-FAIL", "PROBE", "MATCH", "HANDOFF", "LAND"})
             self.assertEqual(options["host_log"], root / "host.log")
             self.assertEqual(options["sources"], {})
-            records = [make_event("a", "info", "noise"), make_event("a", "info", "finding", kind="DECOMP")]
-            self.assertEqual(selected_events(records, options["kinds"]), records[1:])
+            old = {"schema": 1, "time": "2026-01-01T00:00:00+00:00", "actor": "git", "status": "info"}
+            records = [
+                make_event("a", "info", "noise"),
+                make_event("a", "info", "finding", kind="MATCH"),
+                {**old, "message": "repo abc subject", "evidence": None, "kind": "COMMIT"},
+                {**old, "message": "rung", "evidence": None, "kind": "RUNG"},
+            ]
+            self.assertEqual(selected_events(records, options["kinds"]), records[1:3])
             self.assertEqual(selected_events(records, None), records)
+
+    def test_schema1_kind_names_are_refused_in_filters(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(cli, "run_console"):
+            with self.assertRaisesRegex(ValueError, "PORT-FAIL is a schema 1 kind name; filter on RUN-FAIL"):
+                cli.run(Profile(Path(directory)), ("console", "--kinds", "PORT-FAIL,PROBE"))
+            with self.assertRaisesRegex(ValueError, "unknown event kind RUNG"):
+                cli.run(Profile(Path(directory)), ("console", "--kinds", "RUNG"))
 
     def test_host_output_suppresses_spam_and_rate_limits_heartbeat(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -84,7 +97,7 @@ class MissionConsoleTests(unittest.TestCase):
             }
             self.assertEqual(narrated_probe(Profile(root), story, lambda: result), result)
             records = EventReader(root / "events.jsonl").read_new()
-            self.assertEqual([r["kind"] for r in records], ["PROBE", "PROBE", "DECOMP"])
+            self.assertEqual([r["kind"] for r in records], ["PROBE", "PROBE", "MATCH"])
             payload = records[1]["payload"]
             self.assertEqual(payload["question"], story["question"])
             self.assertEqual(payload["owner_address"], "0x80001234")

@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from .dashboard_model import Dashboard, Row, boot_model, mission_model
-from .events import EventReader
+from .events import EventReader, canonical_kind
 from .host_output import HostOutput
 
 
@@ -83,7 +83,7 @@ class Sources:
                 self.errors.append(f"{reader.path}: {error}")
         all_events = sorted((event for records in self.records.values() for event in records),
                             key=lambda event: event.get("time", ""))
-        events = [event for event in all_events if self.kinds is None or event.get("kind") in self.kinds]
+        events = [event for event in all_events if self.kinds is None or canonical_kind(event) in self.kinds]
         if self.host:
             self.watched.add(self.host_path)
             self.host.read_new()

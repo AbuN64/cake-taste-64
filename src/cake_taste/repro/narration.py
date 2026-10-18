@@ -87,7 +87,7 @@ def narrated_probe(profile: Any, story: dict[str, Any], execute: Callable[[], di
     if not finding and checked and differences == 0 and story["match_state"] in {"unmatched", "missing", "stand-in"}:
         finding = "Original behavior characterized for decomp matching; " + outcome
     if finding:
-        append_event(profile, "repro", "info", finding, evidence, kind="DECOMP", payload=payload)
+        append_event(profile, "repro", "info", finding, evidence, kind="MATCH", payload=payload)
     if differences:
         raise TasteError(
             "repro.differences",

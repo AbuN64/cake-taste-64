@@ -62,7 +62,7 @@ class RefSource:
             log = _git(repo["path"], "log", "--reverse", "--format=%h %s", *limit, span)
             for line in log.splitlines():
                 sha, _, subject = line.partition(" ")
-                self.append(self.profile, self.actor, "info", f"{repo['name']} {sha} {subject}", kind="COMMIT")
+                self.append(self.profile, self.actor, "info", f"{repo['name']} {sha} {subject}", kind="LAND")
                 count += 1
             self.seen[repo["name"]] = head
         if count or any(r["name"] not in self.seen for r in self.repos):
