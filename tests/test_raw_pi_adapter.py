@@ -26,6 +26,7 @@ namespace recomp { void do_rom_read(uint8_t*,gpr,uint32_t,size_t); }
             "namespace recomp { constexpr uint32_t rom_base=0x10000000; }\n")
         (root / "ultramodern/ultramodern.hpp").write_text("""
 #define OS_EVENT_PI 8
+#define OS_EVENT_FAULT 12
 namespace ultramodern {
 enum class EventMessageSource {Pi};
 void enqueue_external_message_src(uint32_t,uint32_t,bool,EventMessageSource);
@@ -40,6 +41,7 @@ size_t n64host_rom_size=8192;
 static int step=0;
 extern "C" uint8_t *n64host_xlate_slow(uint8_t *ram,uint32_t va) { return ram+(va&0x1fffffff); }
 extern "C" void __real_osSetEventMesg_recomp(uint8_t*,recomp_context*) { assert(step++==0); }
+extern "C" void n64host_fault_event(uint32_t,uint32_t) { assert(!"no fault event in these cases"); }
 namespace recomp {
 void do_rom_read(uint8_t*,gpr ram,uint32_t rom,size_t size) {
  assert(step++==1); assert(ram==0xffffffff80000100ULL); assert(rom==0x10000200); assert(size==16);
