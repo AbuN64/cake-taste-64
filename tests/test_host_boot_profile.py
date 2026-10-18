@@ -13,7 +13,8 @@ class BootProfileTests(unittest.TestCase):
     def facts(self):
         return {
             "header_entrypoint": "0x80000400", "entrypoint": "0x80200400",
-            "boot": {"rdram_size": 0x800000, "registers": {"status": "0x24000000"}},
+            "boot": {"rdram_size": 0x800000, "vi_mode": "0x80000800",
+                     "registers": {"status": "0x24000000"}},
             "sections": [{"vram": 0x80200400, "rom": 0x1000}, {"vram": 0x80400400, "rom": 0x140000}],
         }
 
@@ -21,6 +22,7 @@ class BootProfileTests(unittest.TestCase):
         rendered = boot_profile.render(self.facts())
         self.assertIn("HOST_ROM_ENTRY_ADDR 2147484672u", rendered)
         self.assertIn("HOST_INITIAL_STATUS 603979776u", rendered)
+        self.assertIn("HOST_INITIAL_VI_MODE 2147485696u", rendered)
         self.assertIn("{2149581824u,4096u}", rendered)
         self.assertIn("{2151678976u,1310720u}", rendered)
 

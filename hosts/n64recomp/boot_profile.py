@@ -18,12 +18,16 @@ def render(facts: dict) -> str:
     if not 0x80000000 <= entry < 0xA0000000 or (entry & 0x1FFFFFFF) + 0x100000 > size:
         raise ValueError("runtime initial 1 MiB ROM load must fit in RDRAM")
     status = word(facts["boot"]["registers"]["status"])
+    mode = word(facts["boot"]["vi_mode"])
+    if not 0x80000000 <= mode < 0xA0000000 or (mode & 0x1FFFFFFF) + 0x50 > size:
+        raise ValueError("initial OSViMode must fit in RDRAM")
     sections = [(word(s["vram"]), word(s["rom"])) for s in facts["sections"]]
     if not sections or len({v for v, _ in sections}) != len(sections):
         raise ValueError("sections must have unique nonempty VRAM mappings")
     rows = ",".join(f"{{{v}u,{r}u}}" for v, r in sections)
     return ("#pragma once\n#include <stdint.h>\n"
             f"#define HOST_ROM_ENTRY_ADDR {entry}u\n#define HOST_INITIAL_STATUS {status}u\n"
+            f"#define HOST_INITIAL_VI_MODE {mode}u\n"
             f"static const uint32_t host_rom_sections[][2] = {{{rows}}};\n")
 
 
