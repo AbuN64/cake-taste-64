@@ -36,3 +36,7 @@ static inline uint8_t *n64host_ptr(uint8_t *rdram, uint64_t va) {
     (((uint64_t)(uint32_t)MEM_W((offset) + 4, reg)) | ((uint64_t)(uint32_t)MEM_W((offset), reg) << 32))
 #undef LOOKUP_FUNC
 #define LOOKUP_FUNC(val) get_function(n64host_func_vram((int32_t)(val)))
+
+#ifdef __RECOMP_H__
+#include "unaligned.h"
+#endif

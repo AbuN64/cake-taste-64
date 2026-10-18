@@ -228,3 +228,46 @@ successful checked original probe also characterizes a declared unmatched,
 missing or stand-in function. Findings and checks retain their evidence/run link.
 Configure the profile logs.events_path to the shared mission stream when that
 is its intended destination; the logger does not guess a global output path.
+
+## Guest resource demand paging
+
+KUSEG accesses now consult mutable paired TLB entries. A missing page publishes
+OSThread Cause/BadVAddr and the profile-qualified faulted-thread global, sends
+OS_EVENT_FAULT without a scheduling gap, and suspends the current host thread.
+The original guest pager queues its ROM transfer, maps the completed page, and
+starts that thread. The suspended C access then retries translation. A resume
+without a mapping, missing fault receiver, or full fault queue fails immediately.
+No sound id, resource offset, definition count, or voice state is injected.
+
+Boot mappings explicitly declare entry indices/page sizes. UnmapTLBAll clears
+0..30 and retains wired entry31; replacement/unmapping invalidate both halves.
+The current profile qualifies the guest MapTLB sixth argument as EntryLo flags
+(global, valid, writable), not the SDK ASID parameter. Other flags are rejected.
+Original facts: asm/us-rev1/func_802AD370_de.s:14-58;
+osUnmapTLBAll.s:14-30; func_802BAD70_de.s:14-15;
+func_8023C1F0_de.s:26-39. No reference implementation was copied.
+
+Bounded call probes have static mappings and no guest pager: unmapped KUSEG
+accesses now fail instead of silently supplying zero definitions. Complete boot
+uses the original pager and replacement policy. KSEG0/KSEG1 and the preexisting
+non-RDRAM/device-shadow boundary are unchanged. In particular, cold frontend
+rendering writes to KSEG2 addressFFFFFFC0 before its scratch allocator has a
+nonzero end pointer; this existing graphics issue is outside the KUSEG pager.
+This host is a diagnostic instrument, not a complete CPU exception emulator.
+
+Unaligned LWL/LWR/SWL/SWR and 64-bit variants use the same translator. Upstream
+inline helpers capture MEM_* before this adapter redefines it; simply replacing
+MEM_* leaves those accesses outside the map. The adapter translates each aligned
+word/doubleword block and calls the original helper using a normalized KSEG0
+window, preserving the upstream merge and sign-extension semantics. Sound voice
+setup exposed this in original func_8025BB84_de at LWL/LWR (actual8025BC00/BC04).
+
+Acceptance: public scenario20261018T172835586136Z ran original gameplay through
+110s; viewed80s and110s captures show first-person play. Host at112s reported
+4410112 queued samples,3210629 nonzero. The sole PulseAudio sink input was
+n64host on m2_stream;48kHz stereo16-bit monitor capture measured RMS4096.93
+(-18.06dBFS) at90..95s and5499.16 (-15.50dBFS) at95..100s. This proves PCM
+production during gameplay, not audio fidelity or end-to-end browser playback.
+54 host/recomp tests plus12 subtests pass, including paired-page eviction,
+fault delivery/resumption and all eight unaligned helper adapters. Evidence,
+failed diagnostic runs and full per-window metrics live in the run handoff.

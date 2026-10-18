@@ -8,6 +8,7 @@
 #include "librecomp/addresses.hpp"
 #include "ultramodern/ultramodern.hpp"
 #include "addrmap.h"
+#include "tlb.h"
 
 extern size_t n64host_rom_size;
 extern "C" void __real_osSetEventMesg_recomp(uint8_t *, recomp_context *);
@@ -20,6 +21,7 @@ uint32_t pi_queue, pi_message;
 }
 }
 extern "C" void __wrap_osSetEventMesg_recomp(uint8_t *rdram, recomp_context *ctx) {
+    if (ctx->r4 == OS_EVENT_FAULT) n64host_fault_event((uint32_t)ctx->r5, (uint32_t)ctx->r6);
     if (ctx->r4 == OS_EVENT_PI) {
         std::lock_guard lock(pi_mutex);
         pi_queue = (uint32_t)ctx->r5;

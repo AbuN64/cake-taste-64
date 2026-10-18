@@ -7,10 +7,8 @@ void n64host_unimplemented(const char *name) {
     static int n; if (n++ < 50) fprintf(stderr, "n64host: unimplemented %s\n", name);
 }
 #define GAP(f) void f(uint8_t* rdram, recomp_context* ctx) { n64host_unimplemented(#f); }
-GAP(osUnmapTLB_recomp) GAP(__osAiDeviceBusy_recomp) GAP(__osDpDeviceBusy_recomp)
+GAP(__osAiDeviceBusy_recomp) GAP(__osDpDeviceBusy_recomp)
 GAP(__osSpDeviceBusy_recomp) GAP(__osInsertTimer_recomp)
-// Device-state queries: report idle / no TLB match so callers proceed.
-void __osProbeTLB_recomp(uint8_t* rdram, recomp_context* ctx) { n64host_unimplemented("__osProbeTLB"); ctx->r2 = (gpr)-1; }
 
 // Runtime exit() invokes destructors of still-running workers and obscures this diagnostic with SIGABRT.
 void __wrap_switch_error(const char *function, uint32_t pc, uint32_t table) {
