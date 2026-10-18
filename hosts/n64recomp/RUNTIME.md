@@ -51,3 +51,14 @@ Each run freezes the request, JSONL input/checkpoint trace, host log and PNGs.
 Checkpoint narration invokes the configured public `taste logs append` command.
 A completed command means delivery/capture succeeded; labels alone do not prove
 a game state. Inspect captured images before accepting front-end or gameplay.
+
+## Graphics input lifetime
+
+N64ModernRuntime pin `cdf5abbd5026fef5c364c676e4667c45e42b6863` requires
+`patches/n64modernruntime-gfx-completion.diff`: send SP completion only after
+`send_dl` has consumed guest display-list memory. The original game can recycle
+that input after SP completion. Before this patch, RT64 eventually parsed boot
+memory indefinitely even though the later RDRAM capture contained a finite,
+valid 6474-command display list. After deferral, graphics continued beyond that
+point and exposed an independent missing original function at0x802ACBCC.
+The runtime pin is unchanged; the exact patch is mirrored under oracle/tools/patches.
