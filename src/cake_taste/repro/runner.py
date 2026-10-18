@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import fcntl
-import hashlib
-import json
 import os
 import shlex
 import shutil
@@ -15,6 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from cake_taste.files import atomic_json, sha256_file
 from cake_taste.logs.events import append_event
 
 
@@ -26,31 +25,8 @@ def _path(profile: Any, key: str) -> Path:
     return profile.resolve_path(profile.section("repro")[key])
 
 
-def _atomic_json(path: Path, value: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix=".receipt-", suffix=".json", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w") as stream:
-            json.dump(value, stream, indent=2)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-        dir_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(dir_fd)
-        finally:
-            os.close(dir_fd)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
-
-
-def _digest(path: Path) -> str:
-    value = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            value.update(block)
-    return value.hexdigest()
+_atomic_json = atomic_json
+_digest = sha256_file
 
 
 def _freeze_artifact(source: Path, destination: Path) -> dict[str, Any]:
@@ -101,6 +77,7 @@ def run_command(
     cwd: Path | None = None,
     artifacts: list[Path] | None = None,
     expected_exit_code: int = 0,
+    env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     if not 0 <= expected_exit_code <= 255:
         raise ValueError("expected_exit_code must be 0..255")
@@ -143,20 +120,21 @@ def run_command(
         }
         _atomic_json(status_path, record)
         append_event(profile, "repro", "started", name + ": " + shlex.join(command), str(receipt))
-        env = os.environ.copy()
+        child_env = os.environ.copy()
         for key in config.get("unset_env", []):
-            env.pop(str(key), None)
-        env.update({str(key): str(value) for key, value in config.get("env", {}).items()})
+            child_env.pop(str(key), None)
+        child_env.update({str(key): str(value) for key, value in config.get("env", {}).items()})
+        child_env.update({str(key): str(value) for key, value in (env or {}).items()})
         config_dir, data_dir = run_dir / "config", run_dir / "data"
         config_dir.mkdir()
         data_dir.mkdir()
-        env.update(XDG_CONFIG_HOME=str(config_dir), XDG_DATA_HOME=str(data_dir))
+        child_env.update(XDG_CONFIG_HOME=str(config_dir), XDG_DATA_HOME=str(data_dir))
         try:
             with output.open("w", buffering=1) as stream:
                 process = subprocess.Popen(
                     command,
                     cwd=workdir,
-                    env=env,
+                    env=child_env,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
