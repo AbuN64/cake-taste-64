@@ -207,3 +207,24 @@ scenario and viewed gameplay before accepting its operational value. The retired
 standalone numeric scale is rejected. The current pinned runtime emits only
 60-Hz VI callbacks; the profile generator rejects PAL timing facts rather than silently
 claiming 50-Hz support.
+
+## Mission console and probe context
+
+`logs console --kinds PORT-FAIL,PROBE,DECOMP,HANDOFF,COMMIT` filters the
+append-only event stream. `--header-kinds PORT-FAIL` pins the latest port stop;
+`--host-log <path>` reads warnings/errors plus at most one heartbeat every
+60 seconds (screen frames, graphics tasks and VI). Per-VI cadence remains only
+in the original host log. The role script only invokes this public command.
+
+`repro probe` emits PROBE start/result/failure events. Supply `--question`,
+`--owner-address`, `--decomp-path`, `--match-state`, and optionally
+`--decomp-finding`, or the corresponding snake_case keys under request `story`.
+Match states are `matched-c`, `stand-in`, `unmatched`, `missing`, `unknown`.
+The call-probe owner address comes from the actual generated symbol table.
+Available assembly source paths are resolved when no source is supplied.
+Neither a C body nor a matching expected value proves the C is matched: absent
+provenance stays `unknown`. A DECOMP finding can be supplied explicitly; a
+successful checked original probe also characterizes a declared unmatched,
+missing or stand-in function. Findings and checks retain their evidence/run link.
+Configure the profile logs.events_path to the shared mission stream when that
+is its intended destination; the logger does not guess a global output path.

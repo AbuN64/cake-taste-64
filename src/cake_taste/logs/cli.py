@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 from typing import Any
 
 from .console import run_console
-from .events import EventReader, append_event, events_path
+from .events import MISSION_KINDS, EventReader, append_event, events_path
 from .header import Header
 
 
@@ -27,6 +28,9 @@ def run(profile: Any, argv: tuple[str, ...]) -> dict[str, Any]:
     commands.add_parser("status-line")
     console = commands.add_parser("console")
     console.add_argument("--title")
+    console.add_argument("--kinds", help="comma-separated event kinds; mission: " + ",".join(MISSION_KINDS))
+    console.add_argument("--header-kinds", help="comma-separated sticky summary kinds")
+    console.add_argument("--host-log", type=Path, help="show only host warnings/errors and a 60-second heartbeat")
     args = parser.parse_args(argv)
     if args.action == "append":
         return append_event(
@@ -48,10 +52,17 @@ def run(profile: Any, argv: tuple[str, ...]) -> dict[str, Any]:
 
         RefSource(profile, section["git_refs"]).serve()
         return {"closed": True}
+    kinds = {kind.strip() for kind in args.kinds.split(",") if kind.strip()} if args.kinds is not None else None
+    header_kinds = (args.header_kinds.split(",") if args.header_kinds is not None
+                    else list(section.get("header_kinds", [])))
+    if kinds is not None:
+        header_kinds = [kind for kind in header_kinds if kind in kinds]
     run_console(
         path,
         title=args.title or str(section.get("title", "ORCHESTRATOR")),
         max_lines=int(section.get("max_lines", 4000)),
-        header=Header(list(section.get("header_kinds", [])), list(section.get("header_counters", []))),
+        header=Header(header_kinds, list(section.get("header_counters", [])), wrap_limit=3 if args.kinds else 1),
+        kinds=kinds,
+        host_log=profile.resolve_path(str(args.host_log)) if args.host_log else None,
     )
     return {"closed": True, "path": str(path)}

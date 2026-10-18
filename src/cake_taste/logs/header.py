@@ -9,7 +9,8 @@ from .wrap import wrap_line
 
 
 class Header:
-    def __init__(self, kinds: list[str], counters: list[str]):
+    def __init__(self, kinds: list[str], counters: list[str], *, wrap_limit: int = 1):
+        self.wrap_limit = wrap_limit
         self.kinds = list(kinds)
         self.counters = list(counters)
         self.latest: dict[str, dict[str, Any]] = {}
@@ -34,8 +35,10 @@ class Header:
             else:
                 stamp = datetime.fromisoformat(str(record["time"])).astimezone().strftime("%H:%M:%S")
                 message = str(record["message"]).replace(chr(10), " ")
+                if kind == "PORT-FAIL" and "ERROR:" in message:
+                    message = message.rsplit("ERROR:", 1)[1].strip()
                 text = f"{kind}: {stamp} {message}"
-            result.append(wrap_line(text, max(1, width))[0])
+            result.extend(wrap_line(text, max(1, width))[:self.wrap_limit])
         counts = "  ".join(f"{name}={self.values.get(name, chr(45))}" for name in self.counters)
         result.append(wrap_line(counts, max(1, width))[0] if counts else "")
         return result

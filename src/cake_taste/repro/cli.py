@@ -10,6 +10,7 @@ from typing import Any
 from cake_taste import TasteError
 
 from .bounded import bounded_probe
+from .narration import MATCH_STATES, narrated_probe, probe_story
 from .probe import KINDS, probe
 from .runner import run_command
 from .scenario import scenario
@@ -34,6 +35,11 @@ def run(profile: Any, argv: tuple[str, ...]) -> dict[str, Any]:
     shot.add_argument("--range", dest="span")
     shot.add_argument("--frames", type=int)
     shot.add_argument("--input", required=True, type=Path)
+    shot.add_argument("--question")
+    shot.add_argument("--owner-address")
+    shot.add_argument("--decomp-path")
+    shot.add_argument("--match-state", choices=MATCH_STATES)
+    shot.add_argument("--decomp-finding")
     args = parser.parse_args(argv)
     if args.action == "scenario":
         return scenario(profile, args.name)
@@ -41,14 +47,19 @@ def run(profile: Any, argv: tuple[str, ...]) -> dict[str, Any]:
         config = profile.section("repro")
         path = profile.resolve_path(config["status_path"])
         return {"path": str(path), "status": json.loads(path.read_text()) if path.is_file() else None}
-    if args.action == "probe" and args.kind == "call":
-        return bounded_probe(profile, function=args.function, script=args.input)
     if args.action == "probe":
+        story = probe_story(args.input, args.function, {
+            "question": args.question, "owner_address": args.owner_address,
+            "decomp_path": args.decomp_path, "match_state": args.match_state,
+            "decomp_finding": args.decomp_finding,
+        }, profile)
+        if args.kind == "call":
+            return narrated_probe(profile, story, lambda: bounded_probe(
+                profile, function=args.function, script=args.input))
         if not args.function:
             raise TasteError("repro.function", f"probe {args.kind} needs --function")
-        return probe(
-            profile, kind=args.kind, function=args.function, script=args.input, frames=args.frames, span=args.span
-        )
+        return narrated_probe(profile, story, lambda: probe(
+            profile, kind=args.kind, function=args.function, script=args.input, frames=args.frames, span=args.span))
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     result = run_command(
         profile,

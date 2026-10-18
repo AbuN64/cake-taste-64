@@ -9,6 +9,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+MISSION_KINDS = ("PORT-FAIL", "PROBE", "DECOMP", "HANDOFF", "COMMIT")
+
 STATUSES = frozenset({"info", "started", "passed", "failed", "blocked", "decision", "handoff"})
 
 
@@ -115,7 +117,17 @@ def format_event(value: dict[str, Any]) -> list[str]:
     stamp = datetime.fromisoformat(str(value["time"])).astimezone().strftime("%H:%M:%S")
     actor, status = str(value["actor"]), str(value["status"]).upper()
     message = str(value["message"]).replace("\n", " ")
-    lines = [f"{stamp} [{actor}/{status}] {message}"]
+    label = f"{value['kind']}/{actor}/{status}" if value.get("kind") else f"{actor}/{status}"
+    lines = [f"{stamp} [{label}] {message}"]
+    payload = value.get("payload") or {}
+    if value.get("kind") in {"PROBE", "DECOMP"}:
+        owner = payload.get("owner_address", "unknown")
+        function = payload.get("function", "unknown")
+        source = payload.get("decomp_path", "unknown")
+        match = payload.get("match_state", "unknown")
+        lines.append(f"    owner {owner} {function} | decomp {source} [{match}]")
+        if payload.get("result"):
+            lines.append("    result: " + str(payload["result"]))
     if value.get("evidence"):
         lines.append("    evidence: " + str(value["evidence"]))
     return lines

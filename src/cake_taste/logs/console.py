@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .events import EventReader, format_event
 from .header import Header
+from .host_output import HostOutput
 from .terminal import resize_to_tty
 from .wrap import WrappedLog, wrap_line
 
@@ -59,7 +60,14 @@ def _draw(screen, view: WrappedLog, count: int, title: str, header: Header) -> N
     screen.refresh()
 
 
-def run_console(path: Path, *, title: str, max_lines: int = 4000, header: Header | None = None) -> None:
+def selected_events(records, kinds: set[str] | None):
+    return [record for record in records if kinds is None or record.get("kind") in kinds]
+
+
+def run_console(
+    path: Path, *, title: str, max_lines: int = 4000, header: Header | None = None,
+    kinds: set[str] | None = None, host_log: Path | None = None,
+) -> None:
     header = header or Header([], [])
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -71,29 +79,41 @@ def run_console(path: Path, *, title: str, max_lines: int = 4000, header: Header
         curses.mousemask(curses.ALL_MOUSE_EVENTS)
         reader = EventReader(path)
         view = WrappedLog(max_lines=max_lines)
-        watcher = _watch_directory(path.parent)
+        directories = {path.parent}
+        if host_log:
+            host_log.parent.mkdir(parents=True, exist_ok=True)
+            directories.add(host_log.parent)
+        watchers = {_watch_directory(directory) for directory in directories}
+        host = HostOutput(host_log) if host_log else None
         wake_read, wake_write = os.pipe2(os.O_NONBLOCK | os.O_CLOEXEC)
         previous = signal.set_wakeup_fd(wake_write)
         signal.signal(signal.SIGWINCH, lambda _sig, _frame: None)
         poller = select.poll()
         poller.register(sys.stdin.fileno(), select.POLLIN)
-        poller.register(watcher, select.POLLIN)
+        for watcher in watchers:
+            poller.register(watcher, select.POLLIN)
         poller.register(wake_read, select.POLLIN)
         try:
-            for record in reader.read_new():
+            for record in selected_events(reader.read_new(), kinds):
                 header.update(record)
                 for line in format_event(record):
+                    view.append(line)
+            if host:
+                for line in host.read_new():
                     view.append(line)
             resize_to_tty(sys.stdin.fileno())
             _draw(screen, view, reader.count, title, header)
             while True:
                 for fd, _mask in poller.poll():
-                    if fd == watcher:
+                    if fd in watchers:
                         with suppress(BlockingIOError):
-                            os.read(watcher, 65536)
-                        for record in reader.read_new():
+                            os.read(fd, 65536)
+                        for record in selected_events(reader.read_new(), kinds):
                             header.update(record)
                             for line in format_event(record):
+                                view.append(line)
+                        if host:
+                            for line in host.read_new():
                                 view.append(line)
                     elif fd == wake_read:
                         with suppress(BlockingIOError):
@@ -126,6 +146,7 @@ def run_console(path: Path, *, title: str, max_lines: int = 4000, header: Header
             signal.set_wakeup_fd(previous)
             os.close(wake_read)
             os.close(wake_write)
-            os.close(watcher)
+            for watcher in watchers:
+                os.close(watcher)
 
     curses.wrapper(main)
