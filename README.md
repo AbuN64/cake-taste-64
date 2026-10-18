@@ -1,6 +1,6 @@
 # cake-taste-64
 
-Runs bounded N64 experiments and records native-output evidence, using Cake Unbake and Recipe Maker.
+Runs bounded N64 experiments and records native-output evidence.
 
 > This is a personal tool. It is not officially maintained and may change or break without notice.
 
@@ -27,10 +27,6 @@ Profiles, commands and the stream are in [docs/usage.md](docs/usage.md).
 ```sh
 pip install -e '.[dev]' && python -m unittest discover -s tests && ruff check src tests
 ```
-
-## Credits
-
-Built on [cake-unbake-64](https://github.com/AbuN64/cake-unbake-64) and [recipe-maker-64](https://github.com/AbuN64/recipe-maker-64).
 
 ## License
 

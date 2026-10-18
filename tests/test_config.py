@@ -20,7 +20,6 @@ class ConfigTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         (self.root / "source").mkdir()
-        (self.root / "host.toml").write_text("host = 'fixture'\n")
         self.file = self.root / "profile.json"
         self.value = {
             "schema_version": 1,
@@ -28,7 +27,6 @@ class ConfigTests(unittest.TestCase):
             "project_root": "source",
             "runtime_root": "state",
             "output_root": "evidence",
-            "tooling": {"project": "source", "host": "host.toml", "timeout_seconds": 5},
             "build": {"steps": [{"argv": ["tool", "argument"]}]},
             "target": {
                 "asset_ledger": "evidence/asset-ledger.json",
@@ -66,28 +64,19 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(profile.section("recomp"), {"steps": []})
 
     def test_unknown_missing_and_ill_typed_keys_fail(self) -> None:
-        for key, value in (("schema_version", True), ("name", ""), ("build", []), ("tooling", None)):
+        for key, value in (("schema_version", True), ("name", ""), ("build", [])):
             original = self.value[key]
             self.value[key] = value
             with self.assertRaises(ConfigError):
                 self.load()
             self.value[key] = original
-        self.value["unknown"] = 1
-        with self.assertRaisesRegex(ConfigError, "unknown keys"):
-            self.load()
-        del self.value["unknown"]
+        for unknown in ("unknown", "tooling"):
+            self.value[unknown] = {}
+            with self.assertRaisesRegex(ConfigError, "unknown keys"):
+                self.load()
+            del self.value[unknown]
         del self.value["name"]
         with self.assertRaisesRegex(ConfigError, "missing keys"):
-            self.load()
-
-    def test_tooling_requires_finite_explicit_timeout(self) -> None:
-        for value in (True, 0, -1, float("inf"), 10**1000):
-            self.value["tooling"]["timeout_seconds"] = value
-            with self.assertRaises(ConfigError):
-                self.load()
-        self.value["tooling"]["timeout_seconds"] = 5
-        self.value["tooling"]["host"] = "absent.toml"
-        with self.assertRaises(ConfigError):
             self.load()
 
     def test_runtime_does_not_enter_target_source_tree(self) -> None:
@@ -104,10 +93,6 @@ class ConfigTests(unittest.TestCase):
             profile.section("stream")
         with self.assertRaisesRegex(ConfigError, "unknown component"):
             profile.section("plugin")
-
-    def test_optional_tooling_is_not_inferred(self) -> None:
-        del self.value["tooling"]
-        self.assertIsNone(self.load().tooling)
 
     def test_public_profile_command_and_owned_domain_dispatch(self) -> None:
         self.load()
@@ -134,6 +119,13 @@ class ConfigTests(unittest.TestCase):
         envelope = json.loads(output.getvalue())
         self.assertFalse(envelope["ok"])
         self.assertEqual(envelope["findings"][0]["key"], "config.missing")
+
+    def test_decomp_tool_passthrough_is_not_a_taste_command(self) -> None:
+        for command in ("unbake", "recipe", "dependencies"):
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(main([command, "report"]), 1)
+            self.assertEqual(json.loads(output.getvalue())["findings"][0]["key"], "cli.arguments")
 
 
 if __name__ == "__main__":

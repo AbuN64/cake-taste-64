@@ -5,7 +5,6 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,7 +15,7 @@ from cake_taste import TasteError
 
 SECTIONS = frozenset({"build", "media", "panes", "stream", "logs", "repro", "recomp", "trace", "handoff", "target"})
 _REQUIRED = frozenset({"schema_version", "name", "project_root", "runtime_root", "output_root"})
-_ALLOWED = _REQUIRED | SECTIONS | {"tooling"}
+_ALLOWED = _REQUIRED | SECTIONS
 
 
 class ConfigError(TasteError):
@@ -25,19 +24,11 @@ class ConfigError(TasteError):
 
 
 @dataclass(frozen=True)
-class Tooling:
-    project: Path
-    host: Path
-    timeout_seconds: float
-
-
-@dataclass(frozen=True)
 class Profile:
     name: str
     project_root: Path
     runtime_root: Path
     output_root: Path
-    tooling: Tooling | None
     source_file: Path
     digest: str
     _sections: Mapping[str, Mapping[str, Any]] = field(repr=False)
@@ -62,13 +53,6 @@ class Profile:
             "project_root": str(self.project_root),
             "runtime_root": str(self.runtime_root),
             "output_root": str(self.output_root),
-            "tooling": None
-            if self.tooling is None
-            else {
-                "project": str(self.tooling.project),
-                "host": str(self.tooling.host),
-                "timeout_seconds": self.tooling.timeout_seconds,
-            },
             "sections": sorted(self._sections),
         }
 
@@ -128,30 +112,11 @@ def load_profile(path: Path) -> Profile:
         raise ConfigError(
             file, "runtime_root/output_root", "runtime and evidence must stay outside the target source tree"
         )
-    tooling = None
-    if "tooling" in value:
-        table = value["tooling"]
-        if not isinstance(table, dict):
-            raise ConfigError(file, "tooling", "expected an object or omit this section")
-        keys = frozenset({"project", "host", "timeout_seconds"})
-        _keys(file, "tooling", table, keys, keys)
-        tool_project = _path(file, "tooling.project", table["project"])
-        host = _path(file, "tooling.host", table["host"])
-        timeout = table["timeout_seconds"]
-        try:
-            finite_timeout = type(timeout) in (int, float) and math.isfinite(timeout) and timeout > 0
-        except OverflowError:
-            finite_timeout = False
-        if not finite_timeout:
-            raise ConfigError(file, "tooling.timeout_seconds", "expected a finite positive number")
-        if not tool_project.is_dir() or not host.is_file():
-            raise ConfigError(file, "tooling", "project directory and host file must exist")
-        tooling = Tooling(tool_project, host, float(timeout))
     sections: dict[str, Mapping[str, Any]] = {}
     for name_ in SECTIONS & value.keys():
         if not isinstance(value[name_], dict):
             raise ConfigError(file, name_, "expected an object")
         sections[name_] = MappingProxyType(copy.deepcopy(value[name_]))
     return Profile(
-        name, project, runtime, output, tooling, file, hashlib.sha256(content).hexdigest(), MappingProxyType(sections)
+        name, project, runtime, output, file, hashlib.sha256(content).hexdigest(), MappingProxyType(sections)
     )
