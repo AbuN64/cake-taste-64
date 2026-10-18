@@ -3,6 +3,7 @@
 #include "ultramodern/ultramodern.hpp"
 #include "cpu_budget.h"
 #include "cpu_profile.h"
+#include "cpu_metrics.h"
 
 void dequeue_external_messages(uint8_t *rdram);
 int64_t host_thread_cpu_ns();
@@ -23,7 +24,9 @@ void service_interrupts() {
 
 extern "C" void n64host_cpu_tick() {
     if (!n64host_rdram || !ultramodern::this_thread()) return;
-    budget.charge(host_thread_cpu_ns(), HOST_NATIVE_CPU_SCALE);
+    const auto cpu_ns = host_thread_cpu_ns();
+    host_cpu_metrics.work(budget.last_cpu_ns, cpu_ns);
+    budget.charge(cpu_ns, HOST_NATIVE_CPU_SCALE);
     // Service already-arrived events even when there is no pacing debt.
     service_interrupts();
     while (budget.slice(slice_ns) == slice_ns) {

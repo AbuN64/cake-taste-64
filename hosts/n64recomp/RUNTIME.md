@@ -181,3 +181,29 @@ mission-failed results after two deaths. The baseline froze at character
 selection with1767 tasks. Queue removal alone and entry service alone did not
 remove that freeze; both the queue correction and paced guest CPU service are
 needed by this measured route. The full suite passed143 tests.
+
+## Measured CPU budget model
+
+The host reports aggregate guest function entries, charged native thread CPU
+time, VI callback count and unwrapped Count ticks once per 60 callbacks. These
+are workload observations, not original instructions or hardware cycles. Native
+time excludes the pacing/scheduler section; SDK execution and clock-read cost
+can still contribute. Concurrent snapshots can straddle a guest publication.
+
+`cpu_calibrate.py <immutable-host-log> <oracle-facts> <source-run>` selects the
+complete 60-VI window with most native CPU work per VI. The profile stores that
+window, the source run/hash, explicit Count/VI rates, and the full-budget model
+assumption. `cpu_profile.py` derives the scale as nominal Count ticks per entry
+divided by native nanoseconds per entry, converted using Count Hz. Algebraically
+this is `(VI / VI_Hz) / native_CPU_seconds`. Count observations independently
+show the host peripheral cadence; Count Hz cancels in the scale calculation.
+
+This is a **frame-budget model**, not a measurement of R4300 cycle costs or
+original-console utilization. Choosing the busiest sampled window assumes its
+work may consume the entire CPU budget and ignores host scheduling overhead.
+An original-hardware or cycle-model instruction/entry trace is still required
+for hardware calibration. Validate the derived model with an untraced canonical
+scenario and viewed gameplay before accepting its operational value. The retired
+standalone numeric scale is rejected. The current pinned runtime emits only
+60-Hz VI callbacks; the profile generator rejects PAL timing facts rather than silently
+claiming 50-Hz support.

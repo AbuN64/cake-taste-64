@@ -10,6 +10,7 @@
 #include <mutex>
 #include <vector>
 #include "host.h"
+#include "cpu_metrics.h"
 #include "host_profile.h"
 #include "boot_profile.h"
 #include "host_input_profile.h"
@@ -24,6 +25,7 @@ size_t n64host_rom_size;
 extern "C" void n64host_cpu_tick();
 extern uint8_t *n64host_rdram;
 extern "C" void n64host_trace(const char *name) {
+    host_cpu_metrics.entry();
     n64host_cpu_tick();
     static FILE *f = [] { const char *p = std::getenv("N64R_TRACE"); FILE *h = p ? std::fopen(p, "w") : nullptr; if (h) setvbuf(h, nullptr, _IOLBF, 0); return h; }();
     if (!f) return;
@@ -69,7 +71,7 @@ RspUcodeFunc *get_ucode(const OSTask *task) {
 }
 void message_box(const char *msg) { std::fprintf(stderr, "n64host: %s\n", msg); }
 std::string thread_name(const OSThread *) { return {}; }
-void vi_cb() {}
+void vi_cb() { host_cpu_vi(osGetCount()); }
 void gfx_init_cb() {}
 
 recomp_func_t *find_func(uint32_t vram) {

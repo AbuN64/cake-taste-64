@@ -63,20 +63,32 @@ int main(){
             binary = root / "test"
             subprocess.run(
                 ["c++", "-std=c++20", "-Wall", "-Wextra", "-Werror", "-pthread",
-                 "-I", str(root), "-I", str(HOST), str(HOST / "cpu_scheduler.cpp"),
+                 "-I", str(root), "-I", str(HOST), str(HOST / "cpu_scheduler.cpp"), str(HOST / "cpu_metrics.cpp"),
                  str(harness), "-o", str(binary)],
                 check=True, capture_output=True,
             )
             result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=2)
             self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_cpu_profile_requires_an_explicit_finite_scale(self):
+    def test_cpu_profile_requires_calibration_and_supported_vi(self):
         spec = importlib.util.spec_from_file_location("cpu_profile", HOST / "cpu_profile.py")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        self.assertIn("HOST_NATIVE_CPU_SCALE 12.0", module.render({"cpu": {"native_time_scale": 12}}))
+        facts = {"cpu": {"timing": {"count_hz": 46875000, "vi_hz": 60},
+                         "calibration": {"model": module.MODEL,
+                                         "window": {"vi": 60, "count_ticks": 46875000,
+                                                    "entries": 100, "native_ns": 400000000}}}}
+        self.assertIn("HOST_NATIVE_CPU_SCALE 2.5", module.render(facts))
         with self.assertRaises(KeyError):
             module.render({})
-        for value in [True, "12", 0, -1, 1025, float("nan"), float("inf")]:
+        for value in [True, "12", 0, -1]:
+            facts["cpu"]["calibration"]["window"]["entries"] = value
             with self.subTest(value=value), self.assertRaises(ValueError):
-                module.render({"cpu": {"native_time_scale": value}})
+                module.render(facts)
+        facts["cpu"]["calibration"]["window"]["entries"] = 100
+        facts["cpu"]["timing"]["vi_hz"] = 50
+        with self.assertRaisesRegex(ValueError, "only 60 Hz"):
+            module.render(facts)
+        facts["cpu"]["native_time_scale"] = 2.5
+        with self.assertRaisesRegex(ValueError, "retired"):
+            module.render(facts)
