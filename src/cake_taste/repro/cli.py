@@ -12,6 +12,7 @@ from cake_taste import TasteError
 from .bounded import bounded_probe
 from .probe import KINDS, probe
 from .runner import run_command
+from .scenario import scenario
 
 
 def run(profile: Any, argv: tuple[str, ...]) -> dict[str, Any]:
@@ -25,6 +26,8 @@ def run(profile: Any, argv: tuple[str, ...]) -> dict[str, Any]:
     task.add_argument("--expect-exit-code", type=int, default=0)
     task.add_argument("command", nargs=argparse.REMAINDER)
     commands.add_parser("status")
+    scene = commands.add_parser("scenario")
+    scene.add_argument("name")
     shot = commands.add_parser("probe")
     shot.add_argument("--kind", required=True, choices=(*KINDS, "call"), help="call = bounded closure probe")
     shot.add_argument("--function", help="name or address; a call request may name it instead")
@@ -32,6 +35,8 @@ def run(profile: Any, argv: tuple[str, ...]) -> dict[str, Any]:
     shot.add_argument("--frames", type=int)
     shot.add_argument("--input", required=True, type=Path)
     args = parser.parse_args(argv)
+    if args.action == "scenario":
+        return scenario(profile, args.name)
     if args.action == "status":
         config = profile.section("repro")
         path = profile.resolve_path(config["status_path"])
