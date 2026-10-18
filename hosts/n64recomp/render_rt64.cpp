@@ -2,6 +2,7 @@
 #include <SDL.h>
 #include <cstring>
 #include "host.h"
+#include "microcode_guard.h"
 #include "ultramodern/renderer_context.hpp"
 #include "hle/rt64_application.h"
 #include "hle/rt64_state.h"
@@ -51,6 +52,9 @@ public:
     void send_dl(const OSTask *task) override {
         app_->state->rsp->reset();
         app_->interpreter->loadUCodeGBI(task->t.ucode & 0x3FFFFFF, task->t.ucode_data & 0x3FFFFFF, true);
+        n64host_require_microcode(app_->interpreter->hleGBI != nullptr &&
+            app_->interpreter->hleGBI->ucode != RT64::GBIUCode::Unknown,
+            task->t.ucode, task->t.ucode_data);
         app_->processDisplayLists(app_->core.RDRAM, task->t.data_ptr & 0x3FFFFFF, 0, true);
     }
     void send_dummy_workload(uint32_t) override {}
