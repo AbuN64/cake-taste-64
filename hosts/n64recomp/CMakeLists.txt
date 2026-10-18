@@ -115,4 +115,4 @@ target_compile_definitions(n64host PRIVATE HLSL_CPU FFX_GCC RT64_SDL_WINDOW_VULK
 target_link_options(n64host PRIVATE -Wl,--wrap=cop0_status_write
   -Wl,--wrap=osSetEventMesg_recomp -Wl,--wrap=osPiRawStartDma_recomp
   -Wl,--wrap=osCreateViManager_recomp
-  -Wl,--wrap=osAiGetStatus_recomp -Wl,--wrap=osAiSetNextBuffer_recomp)
+  -Wl,--wrap=switch_error -Wl,--wrap=osAiGetStatus_recomp -Wl,--wrap=osAiSetNextBuffer_recomp)

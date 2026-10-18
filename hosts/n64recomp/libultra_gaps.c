@@ -2,6 +2,7 @@
 // Each one is a recorded gap, not an implementation.
 #include "recomp.h"
 #include <stdio.h>
+#include <stdlib.h>
 void n64host_unimplemented(const char *name) {
     static int n; if (n++ < 50) fprintf(stderr, "n64host: unimplemented %s\n", name);
 }
@@ -11,3 +12,10 @@ GAP(__osSpDeviceBusy_recomp) GAP(__osInsertTimer_recomp)
 // Device-state queries: report idle / no TLB match so callers proceed.
 void __osSiDeviceBusy_recomp(uint8_t* rdram, recomp_context* ctx) { n64host_unimplemented("__osSiDeviceBusy"); ctx->r2 = 0; }
 void __osProbeTLB_recomp(uint8_t* rdram, recomp_context* ctx) { n64host_unimplemented("__osProbeTLB"); ctx->r2 = (gpr)-1; }
+
+// Runtime exit() invokes destructors of still-running workers and obscures this diagnostic with SIGABRT.
+void __wrap_switch_error(const char *function, uint32_t pc, uint32_t table) {
+    fprintf(stderr, "n64host: incomplete generated switch function=%s pc=0x%08X table=0x%08X\n",
+            function, pc, table);
+    _Exit(4);
+}

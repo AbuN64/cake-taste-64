@@ -89,6 +89,16 @@ class SupplementTests(unittest.TestCase):
             config = tomllib.loads((root / "gen/v1/rsp.toml").read_text())
             self.assertEqual(config["extra_indirect_branch_targets"], [0x1118, 0x12D0])
 
+    def test_rsp_execution_is_independent_of_storage_address(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            settings = replace(load(build(root)), rsp_execution_vram=0x04001100)
+            _rsp(settings, "v1", load_layout(settings, "v1"))
+            config = tomllib.loads((root / "gen/v1/rsp.toml").read_text())
+            self.assertEqual(config["text_address"], 0x04001100)
+            with self.assertRaises(TasteError):
+                _rsp(replace(settings, rsp_execution_vram=0xDFE30), "v1", load_layout(settings, "v1"))
+
     def test_refusal_keeps_the_concrete_cause(self):
         log = "No function found for jal target: 0x80600000\n"
         log += "Error in recompiling root, clearing output file\nError recompiling root\n"

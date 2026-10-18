@@ -50,6 +50,7 @@ class Settings:
     function_sizes: dict[str, dict[int, int]] = field(default_factory=dict)
 
     rsp_indirect_targets: tuple[int, ...] = ()
+    rsp_execution_vram: int | None = None
 
     def sizes_for(self, version: str) -> dict[int, int]:
         return self.function_sizes.get(version, {})
@@ -102,13 +103,18 @@ def load(profile: Any) -> Settings:
         raise TasteError("config.schema", "recomp.entrypoint: expected a word-aligned integer")
     rsp = raw.get("rsp_audio")
     if rsp is not None and (not isinstance(rsp, dict) or not {"segment", "function"} <= rsp.keys()
-                            or rsp.keys() - {"segment", "function", "extra_indirect_branch_targets", "source"}):
+                            or rsp.keys() - {"segment", "function", "extra_indirect_branch_targets",
+                                             "source", "execution_vram"}):
         raise TasteError("config.schema", "recomp.rsp_audio: expected segment, function and optional sourced targets")
     targets = rsp.get("extra_indirect_branch_targets", []) if rsp else []
     if (not isinstance(targets, list)
             or any(type(t) is not int or not 0x1000 <= t < 0x2000 or t & 3 for t in targets)
             or len(targets) != len(set(targets)) or (targets and not rsp.get("source"))):
         raise TasteError("config.schema", "recomp.rsp_audio targets must be unique aligned IMEM addresses with source")
+    execution = rsp.get("execution_vram") if rsp else None
+    if execution is not None and (type(execution) is not int or execution & 3
+            or execution & ~0xFFF not in (0x1000, 0x04001000) or not rsp.get("source")):
+        raise TasteError("config.schema", "recomp.rsp_audio execution_vram needs a sourced aligned IMEM address")
     per_file = raw.get("functions_per_output_file", 1)
     refusals = raw.get("max_refusals", 100)
     if type(per_file) is not int or per_file < 1 or type(refusals) is not int or refusals < 0:
@@ -164,4 +170,5 @@ def load(profile: Any) -> Settings:
         function_sections={str(v): profile.resolve_path(p) for v, p in sections.items()},
         function_sizes=function_sizes,
         rsp_indirect_targets=tuple(targets),
+        rsp_execution_vram=execution,
     )

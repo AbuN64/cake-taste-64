@@ -245,7 +245,11 @@ def _rsp(settings: Settings, version: str, layout: Layout) -> dict[str, Any]:
     if segment is None or segment.vram is None:
         raise TasteError("recomp.rsp", f"segment {settings.rsp_segment} not found")
     size = layout.extent(segment, settings.rom(version).stat().st_size)
-    execution = segment.options.get("execution_vram", segment.vram)
+    execution = settings.rsp_execution_vram
+    if execution is None:
+        execution = segment.options.get("execution_vram", segment.vram)
+    if execution & ~0xFFF not in (0x1000, 0x04001000) or execution & 3:
+        raise TasteError("recomp.rsp", "RSP execution address must be in IMEM; ROM/storage VRAM is not executable")
     out = settings.out(version)
     target = out / "rsp" / f"{settings.rsp_function}.cpp"
     target.parent.mkdir(parents=True, exist_ok=True)
