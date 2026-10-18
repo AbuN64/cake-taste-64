@@ -17,6 +17,8 @@
 #include "xxh3.h"
 #include "recomp_overlays.inl"
 
+size_t n64host_rom_size;
+
 // ---- probes -------------------------------------------------------------
 extern "C" void n64host_trace(const char *name) {
     static FILE *f = [] { const char *p = std::getenv("N64R_TRACE"); FILE *h = p ? std::fopen(p, "w") : nullptr; if (h) setvbuf(h, nullptr, _IOLBF, 0); return h; }();
@@ -109,6 +111,7 @@ int main(int argc, char **argv) {
         }
         if (!found) { std::fprintf(stderr, "n64host: missing original ROM section at 0x%08X\n", section_table[i].ram_addr); return 4; }
     }
+    n64host_rom_size = rom.size();
     recomp::overlays::overlay_section_table_data_t sections{section_table, num_sections, num_sections};
     recomp::overlays::overlays_by_index_t by_index{overlay_sections_by_index, 1};
     recomp::overlays::register_overlays(sections, by_index);

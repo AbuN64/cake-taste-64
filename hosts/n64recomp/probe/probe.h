@@ -13,3 +13,6 @@ void __osSpDeviceBusy_recomp(uint8_t* rdram, recomp_context* ctx);
 void __osInsertTimer_recomp(uint8_t* rdram, recomp_context* ctx);
 void __osSiRawStartDma_recomp(uint8_t* rdram, recomp_context* ctx);
 void osUnmapTLBAll_recomp(uint8_t* rdram, recomp_context* ctx);
+
+// Raw PI is supplied by the host adapter; the pinned runtime omits its declaration.
+void osPiRawStartDma_recomp(uint8_t*, recomp_context*);
