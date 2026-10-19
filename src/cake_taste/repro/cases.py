@@ -93,6 +93,8 @@ def parse_events(text: str) -> list[dict[str, Any]]:
                 current["net"].append([int(parts[1], 16), int(parts[2], 16)])
             elif kind == "overflow":
                 current["overflow"] = True
+            elif kind == "events":
+                current["events_written"] = int(parts[1])
             elif kind == "end":
                 current["status"] = parts[1]
                 current["detail"] = " ".join(parts[2:])
@@ -118,10 +120,15 @@ def cases_text(
     sp: int,
     timeout_ms: int,
     stub_v0: dict[str, int] | None = None,
+    event_budget: int | None = None,
+    lenient: bool = False,
 ) -> str:
     """The harness cases file: shared seeded ranges, then each case's registers, stack words and memory patches,
     and the v0 each stub returns (the request's `stub_v0` for every case, a case's own `stub_v0` over it)."""
-    lines = [f"timeout {timeout_ms}"] + [f"seed {lo:X} {hi:X}" for lo, hi in common_seed]
+    lines = [f"timeout {timeout_ms}"]
+    lines += [f"budget {event_budget}"] if event_budget else []
+    lines += ["lenient 1"] if lenient else []
+    lines += [f"seed {lo:X} {hi:X}" for lo, hi in common_seed]
     for index, item in enumerate(cases):
         name = str(item.get("name", f"case{index}"))
         regs = registers({"registers": item.get("registers", {})}, sp, {})
@@ -218,7 +225,9 @@ def cases_probe(profile: Any, *, function: str | None, script: Path) -> dict[str
     regs_base = registers({}, sp, boot.get("registers", {}))
     before = bytes(memory.data)
     timeout_ms = int(float(request.get("timeout_seconds", 2)) * 1000)
-    cases_file = cases_text(cases, regs_base, entry, seeded, sp, timeout_ms, stub_v0)
+    event_budget = int(request["event_budget"]) if request.get("event_budget") else None
+    lenient = bool(request.get("lenient"))
+    cases_file = cases_text(cases, regs_base, entry, seeded, sp, timeout_ms, stub_v0, event_budget, lenient)
 
     header = host_profile_header(boot)
     host = profile.resolve_path(config["host_dir"])
@@ -318,6 +327,9 @@ def cases_probe(profile: Any, *, function: str | None, script: Path) -> dict[str
         "depth": depth,
         "seeded_ranges": len(seeded),
         "cases": len(results),
+        "event_budget": event_budget,
+        "lenient": bool(request.get("lenient")),
+        "events_max": max((r.get("events_written", 0) for r in results), default=0),
         "statuses": statuses,
         "cases_path": str(cases_path),
         "cases_sha256": sha256_file(cases_path),

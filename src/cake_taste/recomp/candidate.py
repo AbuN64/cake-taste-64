@@ -21,6 +21,8 @@ from .settings import Settings
 
 PREFIX = "behave_"
 _MISSING = re.compile(r"Function (\S+) is set as ignored in the config file but does not exist")
+_NO_TARGET = re.compile(r"No function found for jal target: 0x([0-9A-Fa-f]+)")
+_RETURN = bytes.fromhex("03E0000800000000")  # jr $ra ; nop: what a call outside every original section lands on
 _FAILED = re.compile(r"^(?:Error recompiling|Failed to analyze) (\S+?),?$", re.M)
 
 
@@ -93,6 +95,25 @@ def _toml(settings: Settings, version: str, symbols: Path, rom: Path, funcs: Pat
     return "\n".join(lines)
 
 
+def _stub_sections(targets: list[int], offset: int) -> tuple[list[str], bytes]:
+    """One two-word section per call target that no original section holds (low memory such as the firmware
+    entry), each a bare return: N64Recomp then resolves the call, and the closure renders it as a stub."""
+    lines: list[str] = []
+    for number, vram in enumerate(targets):
+        lines += [
+            "",
+            "[[section]]",
+            f'name = "behave_target_{vram:08X}"',
+            f"rom = 0x{offset + 8 * number:X}",
+            f"vram = 0x{vram:08X}",
+            "size = 0x8",
+            "functions = [",
+            f'    {{ name = "func_{vram:08X}", vram = 0x{vram:08X}, size = 0x8 }},',
+            "]",
+        ]
+    return lines, _RETURN * len(targets)
+
+
 def recompile(
     settings: Settings, version: str, candidate: Candidate, work: Path, originals: dict[str, int]
 ) -> dict[str, str]:
@@ -121,6 +142,8 @@ def recompile(
         out.mkdir(parents=True, exist_ok=True)
         offset = (len(flat) + 15) & ~15
         rom = flat + bytes(offset - len(flat)) + candidate.image
+        targets: list[int] = []  # jal targets outside every section, found by the refusals below
+        base_rom, base_symbols = rom, symbols_text
         section = [
             "",
             "[[section]]",
@@ -136,10 +159,11 @@ def recompile(
             "]",
             "",
         ]
-        atomic_bytes(out / "symbols.toml", (symbols_text + "\n".join(section)).encode())
-        atomic_bytes(out / "rom.flat", rom)
         alias: dict[str, str] = {}
         while True:
+            extra, filler = _stub_sections(targets, (len(base_rom) + 15) & ~15)
+            atomic_bytes(out / "symbols.toml", (base_symbols + "\n".join(section + extra)).encode())
+            atomic_bytes(out / "rom.flat", base_rom + bytes(-len(base_rom) % 16) + filler)
             ignored = [alias.get(name, name) for name in originals]
             atomic_bytes(
                 out / "recomp.toml",
@@ -157,6 +181,10 @@ def recompile(
             missing = _MISSING.search(log)
             if missing and missing.group(1) not in alias:
                 alias[missing.group(1)] = missing.group(1) + "_recomp"  # N64Recomp renames its built-in libultra names
+                continue
+            lost = [int(a, 16) for a in _NO_TARGET.findall(log) if int(a, 16) not in targets]
+            if lost and done.returncode != 0:
+                targets += lost
                 continue
             break
         atomic_bytes(out / "n64recomp.log", log.encode())

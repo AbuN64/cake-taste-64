@@ -7,6 +7,10 @@
 //   case NAME             start a case; entry ADDR, reg rN|fN|status VALUE, mem ADDR HEXBYTES (guest order),
 //                         stubv NAME VALUE (the v0 a stub of that name returns in this case; default 0)
 //   go                    run the case
+//   lenient 1             an access to unmapped space reads zero and drops its stores, a call outside the closure
+//                         is a stub named func_ADDR (as a direct call to it is) (both are recorded as unseeded reads / stub events)
+//   timeout MS | budget N  before the first case: the wall clock and the call/stub/store events one case may write
+//                         (default 20000; a case over it ends fatal event-budget)
 // Events per case: call/stub NAME a0 a1 a2 a3 s0 s1 s2 s3 f12 f14, st ADDR WIDTH VALUE, rd ADDR WIDTH,
 // uns ADDR WIDTH (read outside the seeded ranges), net ADDR VALUE (every word that differs from the image
 // after the case), ret V0 V1 F0 F2, saved REG..., end STATUS [DETAIL].
@@ -47,7 +51,11 @@ static struct { int on; uint32_t va; int w; uint8_t *p; uint32_t before; } pend;
 typedef struct { uint64_t slot[SLOTS]; int count, overflow; } keyset;
 static keyset reads, written;
 static uint64_t calls_seen;
-#define EVENT_BUDGET 20000
+#define DEFAULT_EVENT_BUDGET 20000
+static int lenient;                                    // `lenient 1`: see behave_ptr and get_function
+static uint8_t scratch[16];
+static char indirect_name[32];
+static uint64_t event_budget = DEFAULT_EVENT_BUDGET;   // `budget N` in the cases file replaces it
 static uint64_t events_written;          // call/stub/store lines written in this case
 static volatile sig_atomic_t printing;   // inside an event write: the alarm waits until it is whole
 static volatile sig_atomic_t alarm_late;
@@ -73,7 +81,7 @@ static uint32_t rd(const uint8_t *p, int w) { return w == 1 ? *p : w == 2 ? *(co
 static int seeded_at(uint32_t va);
 static void stop_case(const char *what, uint32_t a, uint32_t b);
 // A case that spins on calls or stores would write gigabytes of events: it ends once it has written enough.
-static void count_event(void) { if (++events_written > EVENT_BUDGET) stop_case("event-budget", 0, 0); }
+static void count_event(void) { if (++events_written > event_budget) stop_case("event-budget", 0, 0); }
 static void end_printing(void) { printing = 0; if (alarm_late) { alarm_late = 0; siglongjmp(stop, 2); } }
 static void mark_written(uint32_t va, int w) {
     for (uint32_t a = va & ~3u; a < va + (uint32_t)w; a += 4) keyset_add(&written, ((uint64_t)a << 1) | 1);
@@ -113,6 +121,13 @@ uint8_t *behave_ptr(uint8_t *mem, uint64_t va64, int width) {
         int mapped = 0;
         for (unsigned i = 0; i < HOST_TLB_COUNT; ++i)
             if (va - host_tlb[i][0] < host_tlb[i][2]) { mapped = 1; break; }
+        if (!mapped && lenient) {
+            keyset_add(&reads, (((uint64_t)va << 4) | 8u | (uint64_t)width) << 1 | 1);
+            memset(scratch, 0, sizeof scratch);
+            last_va = va;
+            pend.on = 0;
+            return scratch;
+        }
         if (!mapped) stop_case("unmapped", va, (uint32_t)width);
     }
     uint32_t xlate = va ^ (width == 1 ? 3u : width == 2 ? 2u : 0u);
@@ -133,17 +148,45 @@ static void args_line(const char *kind, const char *name, uint8_t *mem, recomp_c
     end_printing();
 }
 void behave_enter(const char *name, uint8_t *mem, recomp_context *ctx) { settle(); ++calls_seen; args_line("call", name, mem, ctx); }
+// A stub with no given answer returns zero, until a case has called it TICK_AFTER times: a body that spins on
+// a clock or a status the stub stands for would never leave, so from then on each call answers one step further
+// (v1, the low word of a 64-bit result, by 0x100000; v0 by one). Both bodies of a comparison see the same answers.
+#define TICK_AFTER 16
+static struct { char name[64]; unsigned long long calls; } stub_calls[256];
+static int nstub_calls;
 void behave_stub(const char *name, uint8_t *mem, recomp_context *ctx) {
     settle();
     args_line("stub", name, mem, ctx);
     ctx->r2 = 0;
+    ctx->r3 = 0;
+    int given = 0;
     for (int i = 0; i < nstub_results; ++i)
-        if (!strcmp(stub_results[i].name, name)) ctx->r2 = (gpr)(int64_t)(int32_t)stub_results[i].value;
+        if (!strcmp(stub_results[i].name, name)) { ctx->r2 = (gpr)(int64_t)(int32_t)stub_results[i].value; given = 1; }
+    if (given) return;
+    int slot = -1;
+    for (int i = 0; i < nstub_calls; ++i) if (!strcmp(stub_calls[i].name, name)) slot = i;
+    if (slot < 0 && nstub_calls < 256) {
+        slot = nstub_calls++;
+        snprintf(stub_calls[slot].name, sizeof stub_calls[slot].name, "%s", name);
+        stub_calls[slot].calls = 0;
+    }
+    if (slot >= 0 && ++stub_calls[slot].calls > TICK_AFTER) {
+        unsigned long long step = stub_calls[slot].calls - TICK_AFTER;
+        ctx->r2 = (gpr)(int64_t)(int32_t)step;
+        ctx->r3 = (gpr)(int64_t)(int32_t)(step * 0x100000ull);
+    }
 }
 
+static uint32_t indirect_target;
+static void indirect_stub(uint8_t *mem, recomp_context *ctx) {
+    snprintf(indirect_name, sizeof indirect_name, "func_%08X", indirect_target);
+    behave_stub(indirect_name, mem, ctx);
+}
 recomp_func_t *get_function(int32_t vram) {
+    indirect_target = (uint32_t)vram;
     for (const probe_func *p = probe_funcs; p->fn; ++p)
         if (p->vram == (uint32_t)vram) return p->fn;
+    if (lenient) return indirect_stub;
     stop_case("indirect-call-outside-closure", (uint32_t)vram, 0);
     return 0;
 }
@@ -188,7 +231,7 @@ static void run_case(casebuf *c, unsigned timeout_ms) {
     recomp_context ctx;
     memset(&ctx, 0, sizeof ctx);
     ctx.f_odd = &ctx.f0.u32h;
-    nseeded = ncommon; pend.on = 0; last_va = 0; nstub_results = 0; events_written = 0; printing = 0; alarm_late = 0;
+    nseeded = ncommon; pend.on = 0; last_va = 0; nstub_results = 0; nstub_calls = 0; events_written = 0; printing = 0; alarm_late = 0;
     memset(&reads, 0, sizeof reads); memset(&written, 0, sizeof written);
     fprintf(out, "case %s\n", c->name);
     char *line = c->ops, *next;
@@ -286,6 +329,7 @@ static void run_case(casebuf *c, unsigned timeout_ms) {
         }
     }
     if (netcount > 8192) fprintf(out, "overflow net %d\n", netcount);
+    fprintf(out, "events %llu\n", (unsigned long long)events_written);
     fprintf(out, "end %s%s%s\n", status, *detail ? " " : "", detail);
 }
 
@@ -318,6 +362,8 @@ int main(int argc, char **argv) {
         unsigned long long a, b;
         char name[256];
         if (sscanf(text, "timeout %llu", &a) == 1) timeout_ms = (unsigned)a;
+        else if (sscanf(text, "budget %llu", &a) == 1 && a > 0) event_budget = a;
+        else if (sscanf(text, "lenient %llu", &a) == 1) lenient = a != 0;
         else if (!open && sscanf(text, "seed %llx %llx", &a, &b) == 2 && nseeded < 4096) {
             seeded[nseeded].lo = (uint32_t)a; seeded[nseeded++].hi = (uint32_t)b; ncommon = nseeded;
         } else if (!strncmp(text, "case ", 5)) {
