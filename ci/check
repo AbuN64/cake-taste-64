@@ -1,0 +1,7 @@
+#!/bin/sh
+# Lint and the unittest suite; the C++ host tests compile against mocks with the stock c++.
+# Not here: the N64Recomp oracle build, which needs the ROM and the rig.
+set -eu
+cd "$(dirname "$0")/.."
+ruff check src tests
+PYTHONPATH="src${PYTHONPATH:+:$PYTHONPATH}" python3 -m unittest discover -s tests
