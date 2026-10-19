@@ -10,6 +10,7 @@ from typing import Any
 from cake_taste import TasteError
 
 from .bounded import bounded_probe
+from .capture import capture_probe
 from .cases import cases_probe
 from .narration import MATCH_STATES, narrated_probe, probe_story
 from .probe import KINDS, probe
@@ -30,6 +31,11 @@ def run(profile: Any, argv: tuple[str, ...]) -> dict[str, Any]:
     commands.add_parser("status")
     scene = commands.add_parser("scenario")
     scene.add_argument("name")
+    grab = commands.add_parser("capture", help="run the oracle to a function's entry and freeze RDRAM and registers")
+    grab.add_argument("--function", required=True, help="name or address")
+    grab.add_argument("--version", required=True)
+    grab.add_argument("--stubs", default="", help="comma-separated callees to record, in call order")
+    grab.add_argument("--hit", type=int, default=1, help="which entry to stop at (default: the first)")
     shot = commands.add_parser("probe")
     shot.add_argument("--kind", required=True, choices=(*KINDS, "call", "cases"),
                       help="call = bounded closure probe; cases = many cases with an event record")
@@ -45,6 +51,11 @@ def run(profile: Any, argv: tuple[str, ...]) -> dict[str, Any]:
     args = parser.parse_args(argv)
     if args.action == "scenario":
         return scenario(profile, args.name)
+    if args.action == "capture":
+        return capture_probe(
+            profile, function=args.function, version=args.version, hit=args.hit,
+            stubs=tuple(n for n in args.stubs.split(",") if n),
+        )
     if args.action == "status":
         config = profile.section("repro")
         path = profile.resolve_path(config["status_path"])

@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from cake_taste import TasteError
-from cake_taste.files import atomic_bytes, atomic_json, sha256_file
+from cake_taste.files import atomic_bytes, atomic_json, sha256_bytes, sha256_file
 from cake_taste.recomp.candidate import PREFIX, recompile
 from cake_taste.recomp.candidate import parse as parse_candidate
 from cake_taste.recomp.generate import load_layout
@@ -112,6 +112,30 @@ def _hex(data: bytes) -> str:
     return data.hex().upper()
 
 
+def stub_calls(item: dict[str, Any], index: int) -> list[dict[str, Any]]:
+    """A case's recorded stub calls: the list itself, or `{file, sha256}` naming a frozen capture's calls.json."""
+    given = item.get("stub_calls")
+    if given is None or isinstance(given, list):
+        return given or []
+    try:
+        data = Path(given["file"]).read_bytes()
+    except (OSError, KeyError, TypeError) as exc:
+        raise TasteError("repro.request", f"cases[{index}].stub_calls: {exc}") from exc
+    if given.get("sha256", sha256_bytes(data)) != sha256_bytes(data):
+        raise TasteError("repro.request", f"cases[{index}].stub_calls file changed: {given['file']}")
+    return json.loads(data)
+
+
+def _stub_call_lines(item: dict[str, Any], index: int) -> list[str]:
+    """`scall NAME V0 V1 ADDR:VALUE...`: the Nth call to a stub of that name answers V0/V1 and applies the writes."""
+    lines = []
+    for call in stub_calls(item, index):
+        pairs = [(_int(a, "addr") & 0xFFFFFFFF, _int(v, "value") & 0xFFFFFFFF) for a, v in call["writes"]]
+        writes = "".join(f" {a:X}:{v:X}" for a, v in pairs)
+        lines.append(f"scall {call['name']} {call['v0'] & 0xFFFFFFFF:X} {call['v1'] & 0xFFFFFFFF:X}{writes}")
+    return lines
+
+
 def cases_text(
     cases: list[dict[str, Any]],
     regs_base: dict[str, int],
@@ -149,6 +173,7 @@ def cases_text(
             payload = _payload(patch, number)
             lines.append(f"mem {address:X} {_hex(payload)}")
             lines.append(f"seed {address:X} {address + len(payload):X}")
+        lines += _stub_call_lines(item, index)
         lines.append("go")
     return "\n".join(lines) + "\n"
 
@@ -215,13 +240,13 @@ def cases_probe(profile: Any, *, function: str | None, script: Path) -> dict[str
         seeded.append((int(item["vram"]), int(item["vram"]) + int(item["size"])))
         if int(item["vram"]) >= _RAM_END:
             seeded.append((int(item["vram"]) & 0x7FFFFFFF, (int(item["vram"]) & 0x7FFFFFFF) + int(item["size"])))
-    if candidate:
-        memory.write(candidate.vram, candidate.image)
-        seeded.append((candidate.vram, candidate.vram + len(candidate.image)))
     for index, item in enumerate(seed.get("memory", [])):
         address, payload = _int(item["addr"], f"seed.memory[{index}].addr"), _payload(item, index)
         memory.write(address, payload)
         seeded.append((address, address + len(payload)))
+    if candidate:  # after the seed: a captured RDRAM image never overwrites the body under test
+        memory.write(candidate.vram, candidate.image)
+        seeded.append((candidate.vram, candidate.vram + len(candidate.image)))
     sp = _int(request.get("sp", boot.get("sp", 0x80400000)), "sp")
     window = _int(request.get("stack_window", 0x4000), "stack_window")
     seeded.append((sp - window, sp + 0x400))
@@ -257,6 +282,7 @@ def cases_probe(profile: Any, *, function: str | None, script: Path) -> dict[str
                     sha256_file(gen / "symbols.toml"),
                     memory_end,
                     depth,
+                    *([hashlib.sha256(before).hexdigest()] if seed.get("memory") else []),  # a seeded image is input
                 ]
             ).encode()
         ).hexdigest()[:24]
@@ -311,6 +337,8 @@ def cases_probe(profile: Any, *, function: str | None, script: Path) -> dict[str
     results = parse_events((run_dir / "events.txt").read_text())
     for result, item in zip(results, cases, strict=True):
         result["inputs"] = {k: item[k] for k in ("registers", "stack", "memory", "stub_v0") if k in item}
+        if item.get("stub_calls"):
+            result["inputs"]["stub_calls"] = len(stub_calls(item, 0))
     probe_dir = run_dir / "probe"
     cases_path = probe_dir / "cases.json"
     atomic_json(cases_path, results, sort_keys=True)
@@ -331,6 +359,10 @@ def cases_probe(profile: Any, *, function: str | None, script: Path) -> dict[str
         "indirect": found.indirect,
         "depth": depth,
         "seeded_ranges": len(seeded),
+        "seed_memory": [
+            {"addr": item["addr"], "sha256": item.get("sha256") or sha256_bytes(_payload(item, 0))}
+            for item in seed.get("memory", [])
+        ],
         "cases": len(results),
         "event_budget": event_budget,
         "lenient": bool(request.get("lenient")),

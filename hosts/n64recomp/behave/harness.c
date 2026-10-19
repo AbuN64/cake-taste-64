@@ -5,7 +5,10 @@
 // Cases grammar, numbers in hex, one directive per line:
 //   seed LO HI            memory the probe knows the content of (before the first case: for every case)
 //   case NAME             start a case; entry ADDR, reg rN|fN|status VALUE, mem ADDR HEXBYTES (guest order),
-//                         stubv NAME VALUE (the v0 a stub of that name returns in this case; default 0)
+//                         stubv NAME VALUE (the v0 a stub of that name returns in this case; default 0),
+//                         scall NAME V0 V1 [ADDR:VALUE...] (the next recorded call of a stub of that name: the Nth
+//                         `scall` of a name answers the Nth call of that stub with V0/V1 and writes the words first;
+//                         calls past the recorded ones answer as without; recorded in the real run, see capture)
 //   go                    run the case
 //   lenient 1             an access to unmapped space reads zero and drops its stores, a call outside the closure
 //                         is a stub named func_ADDR (as a direct call to it is) (both are recorded as unseeded reads / stub events)
@@ -40,6 +43,14 @@ static uint32_t stop_a, stop_b;
 typedef struct { char name[64]; uint32_t value; } stub_result;
 static stub_result stub_results[256];
 static int nstub_results;
+
+typedef struct { char name[64]; uint32_t v0, v1; uint32_t first, count; } scall_row;   // words in scall_words
+static scall_row scalls[8192];
+static int nscalls;
+static uint32_t scall_words[1 << 20][2];
+static uint32_t nscall_words;
+static struct { char name[64]; uint32_t used; } scall_used[256];
+static int nscall_used;
 
 typedef struct { uint32_t lo, hi; } range;
 static range seeded[4096];
@@ -166,6 +177,20 @@ void behave_stub(const char *name, uint8_t *mem, recomp_context *ctx) {
     for (int i = 0; i < nstub_results; ++i)
         if (!strcmp(stub_results[i].name, name)) { ctx->r2 = (gpr)(int64_t)(int32_t)stub_results[i].value; given = 1; }
     if (given) return;
+    if (nscalls) {  // the recorded real run of the entry case: the Nth call to this name answers as it did
+        int u = -1;
+        for (int i = 0; i < nscall_used; ++i) if (!strcmp(scall_used[i].name, name)) u = i;
+        if (u < 0 && nscall_used < 256) { u = nscall_used++; snprintf(scall_used[u].name, sizeof scall_used[u].name, "%s", name); scall_used[u].used = 0; }
+        uint32_t want = u >= 0 ? scall_used[u].used++ : 0xFFFFFFFFu, seen = 0;
+        for (int i = 0; u >= 0 && i < nscalls; ++i)
+            if (!strcmp(scalls[i].name, name) && seen++ == want) {
+                for (uint32_t w = 0; w < scalls[i].count; ++w)
+                    *(uint32_t *)n64host_ptr(mem, scall_words[scalls[i].first + w][0]) = scall_words[scalls[i].first + w][1];
+                ctx->r2 = (gpr)(int64_t)(int32_t)scalls[i].v0;
+                ctx->r3 = (gpr)(int64_t)(int32_t)scalls[i].v1;
+                return;
+            }
+    }
     int slot = -1;
     for (int i = 0; i < nstub_calls; ++i) if (!strcmp(stub_calls[i].name, name)) slot = i;
     if (slot < 0 && nstub_calls < 256) {
@@ -234,7 +259,7 @@ static void run_case(casebuf *c, unsigned timeout_ms) {
     recomp_context ctx;
     memset(&ctx, 0, sizeof ctx);
     ctx.f_odd = &ctx.f0.u32h;
-    nseeded = ncommon; pend.on = 0; last_va = 0; nstub_results = 0; nstub_calls = 0; events_written = 0; stack_events = 0; printing = 0; alarm_late = 0;
+    nseeded = ncommon; pend.on = 0; last_va = 0; nstub_results = 0; nstub_calls = 0; nscalls = 0; nscall_words = 0; nscall_used = 0; events_written = 0; stack_events = 0; printing = 0; alarm_late = 0;
     memset(&reads, 0, sizeof reads); memset(&written, 0, sizeof written);
     fprintf(out, "case %s\n", c->name);
     char *line = c->ops, *next;
@@ -253,6 +278,22 @@ static void run_case(casebuf *c, unsigned timeout_ms) {
             if (sscanf(line + 6, "%63s %llx", stub, &a) == 2 && nstub_results < 256) {
                 snprintf(stub_results[nstub_results].name, sizeof stub_results[0].name, "%s", stub);
                 stub_results[nstub_results++].value = (uint32_t)a;
+            }
+        } else if (!strncmp(line, "scall ", 6)) {
+            char row[64];
+            unsigned long long v0, v1;
+            int used = 0;
+            if (sscanf(line + 6, "%63s %llx %llx%n", row, &v0, &v1, &used) == 3 && nscalls < 8192) {
+                scall_row *r = &scalls[nscalls++];
+                snprintf(r->name, sizeof r->name, "%s", row);
+                r->v0 = (uint32_t)v0; r->v1 = (uint32_t)v1; r->first = nscall_words; r->count = 0;
+                const char *rest = line + 6 + used;
+                unsigned long long wa, wv;
+                int step;
+                while (nscall_words < (1u << 20) && sscanf(rest, " %llx:%llx%n", &wa, &wv, &step) == 2) {
+                    scall_words[nscall_words][0] = (uint32_t)wa; scall_words[nscall_words++][1] = (uint32_t)wv;
+                    ++r->count; rest += step;
+                }
             }
         } else if (sscanf(line, "seed %llx %llx", &a, &b) == 2) {
             if (nseeded < 4096) { seeded[nseeded].lo = (uint32_t)a; seeded[nseeded++].hi = (uint32_t)b; }

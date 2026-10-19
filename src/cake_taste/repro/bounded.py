@@ -109,10 +109,20 @@ def seed_layout(memory: Memory, layout: Any, rom: bytes) -> list[dict[str, int |
 
 
 def _payload(item: dict[str, Any], index: int) -> bytes:
-    kinds = [key for key in ("zero", "hex", *_TYPES) if key in item]
+    kinds = [key for key in ("zero", "hex", "file", *_TYPES) if key in item]
     if len(kinds) != 1:
-        raise TasteError("repro.request", f"seed.memory[{index}]: give exactly one of zero, hex, {', '.join(_TYPES)}")
+        raise TasteError(
+            "repro.request", f"seed.memory[{index}]: give exactly one of zero, hex, file, {', '.join(_TYPES)}"
+        )
     kind = kinds[0]
+    if kind == "file":  # a frozen RDRAM capture: the bytes stay out of the request, pinned by their sha256
+        try:
+            data = Path(item["file"]).read_bytes()
+        except OSError as exc:
+            raise TasteError("repro.request", f"seed.memory[{index}].file: {exc}") from exc
+        if item.get("sha256", hashlib.sha256(data).hexdigest()) != hashlib.sha256(data).hexdigest():
+            raise TasteError("repro.request", f"seed.memory[{index}].file changed: {item['file']}")
+        return data
     if kind == "zero":
         return bytes(_int(item["zero"], f"seed.memory[{index}].zero"))
     if kind == "hex":

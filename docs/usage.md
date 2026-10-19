@@ -74,3 +74,22 @@ and optionally `candidate`: `{image, vram, functions: [{name, offset, size}], en
 `vram` (code, then data) whose functions replace the named one. N64Recomp recompiles the image as one extra section of the
 original symbols with every original function ignored, so calls still resolve to the original code. Results are frozen
 in `probe/cases.json`; an original-only request is cached by ROM digest, symbols, closure and cases.
+
+## Oracle capture
+
+`taste repro capture --function F --version V [--hit N]` runs the oracle host under gdb with a breakpoint on the exact
+entry of F's recompiled body (the Nth entry with `--hit`), dumps guest RDRAM and the entry registers (`rdram` and `ctx`
+are the host's first two argument registers) and freezes both in `work_root/captures/<key>`, the key being ROM sha1,
+function, hit, RDRAM size and host binary. A repeat is served from there. The result carries `capture` (the record) and
+`seed`: one `seed.memory` item `{addr, file, sha256}` (a `file` item is the frozen image, pinned by its hash), the entry
+`sp` and the entry registers as one case, ready to splice into a `--kind cases` request. A function the oracle does not
+reach within `timeout_seconds` is refused with the stack where each thread stopped. Profile section `repro.capture`:
+`facts`, `host` (the built oracle executable), `work_root`, `env` (display, library and config variables of the host),
+optional `gdb`, `timeout_seconds` (default 120).
+
+`--stubs a,b,c` also records, in call order, each named callee's arguments, its v0/v1 on return and the RDRAM words it wrote
+(a diff around the call, kept when at most 64 words), counting only calls not made inside another recorded callee. The
+gdb side is `repro/gdb_capture.py` (breakpoints on the callee entries and their return addresses, restricted to the
+captured thread); results go to `calls.json` beside the image and are part of the capture key. A case's `stub_calls`
+(a list, or `{file, sha256}` of that file) becomes harness `scall NAME V0 V1 [ADDR:VALUE...]` lines: the Nth call to a stub
+of that name answers V0/V1 and applies the writes; calls past the recorded ones answer as before.
