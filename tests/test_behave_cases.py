@@ -115,6 +115,18 @@ class ClosureTests(unittest.TestCase):
         }
         self.assertEqual(limit_depth("behave_a", bodies, 1, same_unit="behave_"), {"deep"})
 
+    def test_past_the_cap_the_nearest_callees_stay_and_the_rest_are_boundary_stubs(self):
+        bodies = {n: body(n) for n in ("a", "b", "c", "d")}
+        bodies["root"] = body("root", "a", "b", "c")
+        bodies["a"] = body("a", "d")
+        with self.assertRaises(TasteError):
+            closure("root", bodies, limit=3)
+        found = closure("root", bodies, limit=3, spill=True)
+        self.assertEqual(sorted(found.bodies), ["a", "b", "root"])
+        self.assertEqual(found.stubs, {"c": "boundary", "d": "boundary"})
+        self.assertEqual(sorted(found.spilled), ["c", "d"])
+        self.assertEqual(closure("root", bodies, limit=9, spill=True).spilled, [])
+
     def test_a_stub_leaves_v0_to_its_hook_when_the_probe_answers_per_run(self):
         found = closure("root", {"root": body("root", "leaf")})
         fixed = render_unit(found, {"root": 0x80001000}, '#include "recomp.h"', True, {"leaf": 5})

@@ -58,6 +58,7 @@ class Closure:
     bodies: dict[str, str] = field(default_factory=dict)
     stubs: dict[str, str] = field(default_factory=dict)  # name -> reason
     indirect: list[str] = field(default_factory=list)  # functions that call through LOOKUP_FUNC
+    spilled: list[str] = field(default_factory=list)  # callees past the cap, cut as boundary stubs (spill mode)
 
 
 def resolve_target(target: str, vrams: dict[str, int]) -> str:
@@ -80,8 +81,11 @@ def closure(
     boundary: set[str] | frozenset[str] = frozenset(),
     extra: tuple[str, ...] = (),
     limit: int = 64,
+    spill: bool = False,
 ) -> Closure:
-    """Breadth-first direct-call closure; boundary names and bodiless callees become stubs."""
+    """Breadth-first direct-call closure; boundary names and bodiless callees become stubs. Past `limit` bodies the
+    closure is an error, or with `spill` every callee not yet taken (nearest ones are taken first) becomes a boundary
+    stub too: the probe records it as `spilled` and the caller compares the calls made to it."""
     if root in boundary or root not in bodies:
         raise TasteError("repro.closure", f"target {root} must have a generated body and cannot be a stub")
     result = Closure(root)
@@ -99,9 +103,13 @@ def closure(
         if body is None:
             result.stubs[name] = "no generated body"
             continue
+        if len(result.bodies) >= limit:
+            if not spill:
+                raise TasteError("repro.closure", f"closure of {root} exceeds {limit} functions; add boundary stubs")
+            result.stubs[name] = "boundary"
+            result.spilled.append(name)
+            continue
         result.bodies[name] = body
-        if len(result.bodies) > limit:
-            raise TasteError("repro.closure", f"closure of {root} exceeds {limit} functions; add boundary stubs")
         if "LOOKUP_FUNC(" in body:
             result.indirect.append(name)
         header_end = body.index("{")

@@ -197,6 +197,7 @@ def cases_probe(profile: Any, *, function: str | None, script: Path) -> dict[str
         bodies,
         boundary=boundary | stub_v0.keys() | deep,
         limit=int(request.get("max_functions", config.get("max_functions", 256))),
+        spill=True,  # a closure past the cap ends in boundary stubs: behave compares the calls made to them
     )
     include = '#include "recomp.h"\n#include "behave.h"'
     unit = render_unit(found, vrams, include, True, stub_v0, headers=(), runtime_v0=True)
@@ -326,6 +327,7 @@ def cases_probe(profile: Any, *, function: str | None, script: Path) -> dict[str
         "input_sha256": sha256_file(script),
         "closure": sorted(found.bodies),
         "stubs": found.stubs,
+        "spilled": sorted(found.spilled),
         "indirect": found.indirect,
         "depth": depth,
         "seeded_ranges": len(seeded),
