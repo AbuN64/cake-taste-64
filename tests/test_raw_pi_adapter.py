@@ -33,6 +33,8 @@ void enqueue_external_message_src(uint32_t,uint32_t,bool,EventMessageSource);
 }
 """)
         (root / "mock.cpp").write_text("""
+#include <cstdint>
+extern "C" void n64host_golden_pi(uint32_t,uint32_t,uint32_t) {}
 #include <cassert>
 #include <cstring>
 #include "librecomp/game.hpp"

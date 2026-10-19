@@ -11,6 +11,7 @@
 #include "tlb.h"
 
 extern size_t n64host_rom_size;
+extern "C" void n64host_golden_pi(uint32_t, uint32_t, uint32_t);
 extern "C" void __real_osSetEventMesg_recomp(uint8_t *, recomp_context *);
 namespace {
 std::mutex pi_mutex;
@@ -41,6 +42,7 @@ extern "C" void __wrap_osPiRawStartDma_recomp(uint8_t *rdram, recomp_context *ct
     uint32_t queue, message;
     { std::lock_guard lock(pi_mutex); queue = pi_queue; message = pi_message; }
     if (!queue) fail("OS_EVENT_PI has no registered queue");
+    n64host_golden_pi(physical - recomp::rom_base, (uint32_t)ram, length);
     recomp::do_rom_read(rdram, (gpr)(int32_t)(0x80000000u | (uint32_t)ram), physical, length);
     ultramodern::enqueue_external_message_src(queue, message, false, ultramodern::EventMessageSource::Pi);
     ctx->r2 = 0;

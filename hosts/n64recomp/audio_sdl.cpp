@@ -5,6 +5,8 @@
 #include <mutex>
 #include "librecomp/game.hpp"
 #include "ultramodern/ultramodern.hpp"
+extern "C" void n64host_golden_pcm(const int16_t *, size_t);
+extern "C" void n64host_golden_rate(unsigned);
 namespace {
 SDL_AudioDeviceID dev;
 uint32_t rate = 32000;
@@ -27,6 +29,7 @@ void open_dev() {
                  SDL_GetCurrentAudioDriver(), have.freq, have.channels);
 }
 void queue(int16_t *s, size_t n) {
+    n64host_golden_pcm(s, n);
     std::lock_guard lock(audio_mutex);
     if (!dev) open_dev();
     if (n > UINT32_MAX / sizeof(int16_t) || SDL_QueueAudio(dev, s, Uint32(n * sizeof(int16_t))) != 0)
@@ -51,7 +54,7 @@ uint32_t status() {
     while (!buffer_ends.empty() && buffer_ends.front() <= consumed) buffer_ends.pop_front();
     return (pending ? 0x40000000u : 0) | (buffer_ends.size() >= 2 ? 0x80000000u : 0);
 }
-void set_freq(uint32_t f) { std::lock_guard lock(audio_mutex); rate = f; open_dev(); }
+void set_freq(uint32_t f) { n64host_golden_rate(f); std::lock_guard lock(audio_mutex); rate = f; open_dev(); }
 }
 ultramodern::audio_callbacks_t host_audio_callbacks() { return {queue, remaining, set_freq}; }
 

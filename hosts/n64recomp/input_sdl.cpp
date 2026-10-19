@@ -64,6 +64,15 @@ ultramodern::input::connected_device_info_t info(int n) {
 }
 }
 void n64host_input_init() { init(); }
+void n64host_input_event(const SDL_Event &);
+// Press a key by SDL name without a window event (scripted runs); same latch as a real keydown.
+void n64host_script_key(const char *name) {
+    SDL_Event e{};
+    e.type = SDL_KEYDOWN;
+    e.key.keysym.scancode = SDL_GetScancodeFromName(name);
+    if (e.key.keysym.scancode == SDL_SCANCODE_UNKNOWN) { std::fprintf(stderr, "n64host: unknown script key %s\n", name); return; }
+    n64host_input_event(e);
+}
 void n64host_input_event(const SDL_Event &event) {
     if (event.type != SDL_KEYDOWN || event.key.repeat) return;
     if (!initialized) init();

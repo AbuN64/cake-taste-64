@@ -24,15 +24,22 @@ size_t n64host_rom_size;
 // ---- probes -------------------------------------------------------------
 extern "C" void n64host_cpu_tick();
 extern uint8_t *n64host_rdram;
+extern "C" void n64host_golden_init();
+extern "C" void n64host_golden_vi();
+extern "C" void n64host_golden_finish();
+extern "C" uint64_t n64host_golden_frame();
+extern "C" void n64host_golden_entry(const char *, unsigned);
+extern "C" void n64host_golden_audio(uint32_t, uint32_t, uint32_t);
 extern "C" void n64host_trace(const char *name) {
     host_cpu_metrics.entry();
     n64host_cpu_tick();
+    n64host_golden_entry(name, (unsigned)SDL_GetThreadID(nullptr));
     static FILE *f = [] { const char *p = std::getenv("N64R_TRACE"); FILE *h = p ? std::fopen(p, "w") : nullptr; if (h) setvbuf(h, nullptr, _IOLBF, 0); return h; }();
     if (!f) return;
     static std::atomic<unsigned> frame{0};
     static std::mutex m;
     std::lock_guard<std::mutex> g(m);
-    std::fprintf(f, "%u %u %s\n", frame.load(), (unsigned)SDL_GetThreadID(nullptr), name);
+    std::fprintf(f, "%u %u %s\n", (unsigned)n64host_golden_frame(), (unsigned)SDL_GetThreadID(nullptr), name);
 }
 extern "C" void n64host_addrmap_init(void);
 extern "C" void n64host_memwatch(unsigned, unsigned, int) {}
@@ -67,11 +74,12 @@ void update_gfx(void *) {
 }
 RspUcodeFunc *get_ucode(const OSTask *task) {
     // type 2 = audio (M_AUDTASK); gfx tasks go to the renderer, not the RSP interpreter
+    if (task->t.type == 2) n64host_golden_audio(task->t.ucode, task->t.data_ptr, task->t.data_size);
     return task->t.type == 2 ? rsp_audio : nullptr;
 }
 void message_box(const char *msg) { std::fprintf(stderr, "n64host: %s\n", msg); }
 std::string thread_name(const OSThread *) { return {}; }
-void vi_cb() { host_cpu_vi(osGetCount()); }
+void vi_cb() { host_cpu_vi(osGetCount()); n64host_golden_vi(); }
 void gfx_init_cb() {}
 
 recomp_func_t *find_func(uint32_t vram) {
@@ -110,6 +118,7 @@ void entry(uint8_t *rdram, recomp_context *ctx) {
 }
 int main(int argc, char **argv) {
     n64host_addrmap_init();
+    n64host_golden_init();
     const char *rom_path = std::getenv("N64R_ROM");
     if (!rom_path) { std::fprintf(stderr, "set N64R_ROM to the original ROM image\n"); return 2; }
     std::ifstream in(rom_path, std::ios::binary);
@@ -180,5 +189,6 @@ int main(int argc, char **argv) {
     cfg.threads_callbacks = thr_cb;
     recomp::start_game(u8"host", "");
     recomp::start(cfg);   // runs the gfx loop until quit
+    n64host_golden_finish();
     return 0;
 }

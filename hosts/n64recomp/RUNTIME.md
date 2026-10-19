@@ -271,3 +271,23 @@ production during gameplay, not audio fidelity or end-to-end browser playback.
 54 host/recomp tests plus12 subtests pass, including paired-page eviction,
 fault delivery/resumption and all eight unaligned helper adapters. Evidence,
 failed diagnostic runs and full per-window metrics live in the run handoff.
+
+## Golden recorder and scripted input
+`golden.cpp` is a test instrument, off unless `N64R_GOLDEN_DIR` is set; with it
+unset the host behaves as before. It knows nothing about any game.
+
+- `N64R_GOLDEN_DIR`: output directory (must exist). Receives `events.jsonl`
+  (checkpoint, key, gfx, acmd, rate, pi and quit events), `dl-<checkpoint>.bin`
+  (first graphics-task display list at or after a checkpoint; `boot` is the
+  first task), `acmd-all.bin` (every audio command list), `pcm-all.s16` (queued
+  PCM, rate in the `rate` events) and `trace-<checkpoint>.tsv` (functions in
+  first-entry order). An unusable directory exits with status 5.
+- `N64R_SCRIPT`: input script, one line per step: `<vi> key <SDL key name>`,
+  `<vi> checkpoint <name>` or `<vi> quit`. `<vi>` is the VI retrace count, so
+  steps are paced by emulated video, not wall time. Needs `N64R_GOLDEN_DIR`.
+- `N64R_SHOT_CMD`: shell template run at each checkpoint; `%s` is the PNG path
+  (`<dir>/vi-<checkpoint>.png`). Needs `N64R_GOLDEN_DIR`.
+
+`N64R_TRACE` lines now carry the VI retrace count in the frame column.
+Recordings are not bit-reproducible after boot: the audio thread is wall-paced
+and threads interleave, so compare structure, not bytes.

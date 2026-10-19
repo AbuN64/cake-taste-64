@@ -35,6 +35,10 @@ void SDL_PauseAudioDevice(SDL_AudioDeviceID,int); int SDL_QueueAudio(SDL_AudioDe
 Uint32 SDL_GetQueuedAudioSize(SDL_AudioDeviceID); const char *SDL_GetError();const char *SDL_GetCurrentAudioDriver();
 """)
             (p / "mock.cpp").write_text(r"""
+#include <cstddef>
+#include <cstdint>
+extern "C" void n64host_golden_pcm(const int16_t*, size_t) {}
+extern "C" void n64host_golden_rate(unsigned) {}
 #include <cassert>
 #include <cstring>
 #include "SDL.h"

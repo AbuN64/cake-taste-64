@@ -10,6 +10,7 @@
 #include "hle/rt64_state.h"
 #include "hle/rt64_interpreter.h"
 
+extern "C" void n64host_golden_gfx(uint32_t, uint32_t, uint32_t, uint32_t);
 namespace {
 using namespace ultramodern::renderer;
 
@@ -52,6 +53,7 @@ public:
     bool update_config(const ultramodern::renderer::GraphicsConfig &, const ultramodern::renderer::GraphicsConfig &) override { return true; }
     void enable_instant_present() override {}
     void send_dl(const OSTask *task) override {
+        n64host_golden_gfx(task->t.ucode, task->t.ucode_data, task->t.data_ptr, task->t.data_size);
         app_->state->rsp->reset();
         app_->interpreter->loadUCodeGBI(task->t.ucode & 0x3FFFFFF, task->t.ucode_data & 0x3FFFFFF, true);
         n64host_require_microcode(app_->interpreter->hleGBI != nullptr &&
