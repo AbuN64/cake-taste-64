@@ -107,6 +107,17 @@ void entry(uint8_t *rdram, recomp_context *ctx) {
             int32_t alias = v & 0x7FFFFFFF;
             if (v < 0 && n64host_func_vram(alias) == v) recomp::overlays::add_loaded_function(alias, section_table[s].funcs[i].func);
         }
+    // Functions the profile renames to runtime replacements stay out of N64Recomp's table; guest code that
+    // calls one through a stored pointer needs its address registered.
+    static const struct { uint32_t vram; recomp_func_t *func; } replaced[] = {
+#if __has_include("replaced_funcs.inl")
+#include "replaced_funcs.inl"
+#else
+        { 0u, nullptr }
+#endif
+    };
+    for (const auto &r : replaced)
+        if (r.func) recomp::overlays::add_loaded_function((int32_t)r.vram, r.func);
     recomp_func_t *f = find_func(HOST_ENTRY_ADDR);
     if (!f) {
         f = find_func(HOST_BOOT_MAIN);

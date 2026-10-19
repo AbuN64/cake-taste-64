@@ -3,6 +3,10 @@
 #include "memwatch.h"
 // libultra internals the pinned runtime does not implement (see libultra_gaps.c), plus refused functions.
 #include "refused_decls.h"
+// Every runtime call the generated code makes, declared by the generator (some are defined but not declared).
+#if __has_include("recomp_decls.h")
+#include "recomp_decls.h"
+#endif
 void osMapTLB_recomp(uint8_t* rdram, recomp_context* ctx);
 void __osProbeTLB_recomp(uint8_t* rdram, recomp_context* ctx);
 void __osSiDeviceBusy_recomp(uint8_t* rdram, recomp_context* ctx);

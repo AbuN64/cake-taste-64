@@ -112,7 +112,10 @@ extern "C" void n64host_golden_vi() {
             std::fflush(events);
             write_trace("final");
             std::fflush(acmd_all); std::fflush(pcm_all);
-            SDL_Event e{}; e.type = SDL_QUIT; SDL_PushEvent(&e);
+            // Everything is on disk. Runtime teardown races the running guest threads (a crash after the
+            // goldens are written), so a scripted quit ends the process here with a clean status.
+            std::fflush(stdout); std::fflush(stderr);
+            std::_Exit(0);
         }
     }
 }

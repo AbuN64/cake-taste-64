@@ -289,5 +289,23 @@ unset the host behaves as before. It knows nothing about any game.
   (`<dir>/vi-<checkpoint>.png`). Needs `N64R_GOLDEN_DIR`.
 
 `N64R_TRACE` lines now carry the VI retrace count in the frame column.
+A `quit` step flushes every file and ends the process with status 0 without runtime
+teardown, which races the running guest threads.
 Recordings are not bit-reproducible after boot: the audio thread is wall-paced
 and threads interleave, so compare structure, not bytes.
+
+## Generation facts for a new game
+- `recomp.symbol_names[version]` maps a vram to a runtime name. A value is the name, or
+  `{"name", "source"}` so the evidence travels with the fact. Every name must have a `<name>_recomp`
+  in the runtime or the host; the generator also lists them in `funcs/replaced_funcs.inl`, which the host
+  registers so a stored function pointer (a device-manager table) reaches the replacement.
+- `recomp.rsp_audio` takes either `segment` (a layout segment) or `rom` + `size` + `execution_vram` +
+  `source` when the decomp does not delimit the microcode.
+- Code that a decomp keeps as a data split is found by N64Recomp only as `static_<n>_<vram>`. A refused
+  static is declared as a function whose size runs to the next function, function symbol or split
+  (`statics.tsv` records name, vram, size and the boundary used) and is then ignored by name.
+- Data that decodes as code can make N64Recomp emit C that does not compile (a store to the zero register,
+  a branch to a label of another function). The generator refuses those functions like any other.
+- Backward branches carry `TRACE_LOOP()` (trace mode): a guest spin-wait that stays inside one function
+  would never reach a function entry, so interrupts would never be serviced.
+- `funcs/recomp_decls.h` declares every `<name>_recomp` the generated code calls.

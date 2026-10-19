@@ -20,5 +20,10 @@ class GoldenDocsTest(unittest.TestCase):
         self.assertIn("if (!on()) return;", source)
 
 
+    def test_scripted_quit_flushes_then_exits_without_runtime_teardown(self):
+        source = (HOST / "golden.cpp").read_text(encoding="utf-8")
+        quit_step = source[source.index('st.kind == "quit"'):]
+        self.assertLess(quit_step.index('write_trace("final")'), quit_step.index("std::_Exit(0)"))
+        self.assertIn("without runtime\nteardown", (HOST / "RUNTIME.md").read_text(encoding="utf-8"))
 if __name__ == "__main__":
     unittest.main()
