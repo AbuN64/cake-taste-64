@@ -71,8 +71,25 @@ extern "C" void __wrap_##name##_recomp(uint8_t *ram,recomp_context *ctx) { \
     __real_##name##_recomp(ram,ctx); \
     record(ram,ctx,#name,"return",queue_arg); \
 }
-WRAP(osRecvMesg,true)
-WRAP(osSendMesg,true)
+// Hooks of the golden recorder (weak: absent in unit-test mocks). Send fires before the real call,
+// receive after it, so the recorder can pair each delivered message with its sender.
+extern "C" void n64host_golden_send(uint8_t *, uint32_t, uint32_t) __attribute__((weak));
+extern "C" void n64host_golden_recv(uint8_t *, uint32_t, uint32_t) __attribute__((weak));
+extern "C" void __real_osSendMesg_recomp(uint8_t*,recomp_context*);
+extern "C" void __wrap_osSendMesg_recomp(uint8_t *ram,recomp_context *ctx) {
+    if (n64host_golden_send) n64host_golden_send(ram, uint32_t(ctx->r4), uint32_t(ctx->r5));
+    record(ram,ctx,"osSendMesg","enter",true);
+    __real_osSendMesg_recomp(ram,ctx);
+    record(ram,ctx,"osSendMesg","return",true);
+}
+extern "C" void __real_osRecvMesg_recomp(uint8_t*,recomp_context*);
+extern "C" void __wrap_osRecvMesg_recomp(uint8_t *ram,recomp_context *ctx) {
+    const uint32_t queue = uint32_t(ctx->r4), out = uint32_t(ctx->r5);
+    record(ram,ctx,"osRecvMesg","enter",true);
+    __real_osRecvMesg_recomp(ram,ctx);
+    record(ram,ctx,"osRecvMesg","return",true);
+    if (n64host_golden_recv && out) n64host_golden_recv(ram, queue, out);
+}
 WRAP(osCreateMesgQueue,true)
 WRAP(osContStartQuery,true)
 WRAP(osContStartReadData,true)

@@ -288,6 +288,12 @@ unset the host behaves as before. It knows nothing about any game.
 - `N64R_SHOT_CMD`: shell template run at each checkpoint; `%s` is the PNG path
   (`<dir>/vi-<checkpoint>.png`). Needs `N64R_GOLDEN_DIR`.
 
+Every ROM DMA is a `pi` event: `rom` offset, `ram` physical destination, `len`, `thread`, and `req`,
+the requesters, nearest first. Each level is the thread that sent the message the DMA thread last
+received (`thread`) and the last functions it entered before that send (`fns`, oldest first). The next
+level is the same for the message that sender had itself received, so a loader thread's own callers
+show up behind it. Empty `req` means no send was paired.
+
 `N64R_TRACE` lines now carry the VI retrace count in the frame column.
 A `quit` step flushes every file and ends the process with status 0 without runtime
 teardown, which races the running guest threads.

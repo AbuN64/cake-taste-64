@@ -4,7 +4,10 @@
 //   N64R_SCRIPT       lines "<vi> key <Name>", "<vi> checkpoint <name>", "<vi> quit" (vi = retrace count)
 //   N64R_SHOT_CMD     shell template run at a checkpoint; "%s" is replaced by the PNG path
 #include <SDL.h>
+#include <array>
 #include <atomic>
+#include <deque>
+#include <memory>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -35,6 +38,18 @@ uint64_t acmd_seq = 0, acmd_bytes = 0, pcm_samples = 0, dl_seq = 0;
 unsigned pcm_rate = 0;
 std::unordered_map<const char *, size_t> &seen = *new std::unordered_map<const char *, size_t>;
 std::vector<Entry> &order = *new std::vector<Entry>;
+// Requester tracking for PI DMAs: the last functions entered per thread, and the payload words of
+// message sends not yet received. A DMA's requester is the sender of the message its thread last received.
+constexpr size_t RING = 8;
+struct Ring { std::array<const char *, RING> fn{}; size_t n = 0; };
+struct Send {
+    unsigned thread; uint32_t queue, msg;
+    std::array<const char *, RING> fn; size_t nfn;
+    std::shared_ptr<const Send> parent;  // the message the sending thread had last received: the chain upward
+};
+std::unordered_map<unsigned, Ring> &rings = *new std::unordered_map<unsigned, Ring>;
+std::deque<std::shared_ptr<Send>> &sends = *new std::deque<std::shared_ptr<Send>>;
+std::unordered_map<unsigned, std::shared_ptr<const Send>> &current = *new std::unordered_map<unsigned, std::shared_ptr<const Send>>;
 
 bool on() { return events != nullptr; }
 uint8_t *ram(uint32_t addr) { return n64host_rdram + (addr & 0x3FFFFFF); }
@@ -125,6 +140,8 @@ extern "C" uint64_t n64host_golden_frame() { return vi_count.load(); }
 extern "C" void n64host_golden_entry(const char *name, unsigned thread) {
     if (!on()) return;
     std::lock_guard g(lock);
+    Ring &r = rings[thread];
+    r.fn[r.n++ % RING] = name;
     auto it = seen.find(name);
     if (it == seen.end()) {
         seen.emplace(name, order.size());
@@ -178,15 +195,58 @@ extern "C" void n64host_golden_rate(unsigned rate) {
         (unsigned long long)vi_count.load(), (unsigned long long)pcm_samples);
 }
 
+extern "C" void n64host_golden_send(uint8_t *, uint32_t queue, uint32_t msg) {
+    if (!on()) return;
+    std::lock_guard g(lock);
+    auto s = std::make_shared<Send>();
+    s->queue = queue;
+    s->msg = msg;
+    s->thread = (unsigned)SDL_GetThreadID(nullptr);
+    const Ring &r = rings[s->thread];
+    s->nfn = r.n < RING ? r.n : RING;
+    for (size_t i = 0; i < s->nfn; ++i) s->fn[i] = r.fn[(r.n - s->nfn + i) % RING];
+    auto cur = current.find(s->thread);
+    if (cur != current.end()) s->parent = cur->second;
+    sends.push_back(s);
+    if (sends.size() > 1024) sends.pop_front();
+}
+
+// A message was delivered to this thread: pair it with the oldest unconsumed send of that value to
+// that queue. The thread's next PI DMA is attributed to that sender, and through the message the sender
+// itself had received, to its senders in turn.
+extern "C" void n64host_golden_recv(uint8_t *, uint32_t queue, uint32_t out) {
+    if (!on()) return;
+    uint32_t msg;
+    if ((out & 0xE0000000u) != 0x80000000u && (out & 0xE0000000u) != 0xA0000000u) return;
+    std::memcpy(&msg, n64host_rdram + (out & 0x3FFFFFFu & ~3u), 4);
+    std::lock_guard g(lock);
+    for (auto it = sends.begin(); it != sends.end(); ++it)
+        if ((*it)->queue == queue && (*it)->msg == msg) {
+            current[(unsigned)SDL_GetThreadID(nullptr)] = *it;
+            sends.erase(it);
+            return;
+        }
+}
+
 extern "C" void n64host_golden_pi(uint32_t rom, uint32_t ram_addr, uint32_t length) {
     if (!on()) return;
     std::lock_guard g(lock);
-    std::fprintf(events, "{\"ev\":\"pi\",\"vi\":%llu,\"rom\":%u,\"ram\":%u,\"len\":%u}\n",
-        (unsigned long long)vi_count.load(), rom, ram_addr, length);
+    const unsigned me = (unsigned)SDL_GetThreadID(nullptr);
+    std::string chain;
+    auto cur = current.find(me);
+    int depth = 0;
+    for (const Send *s = cur != current.end() ? cur->second.get() : nullptr; s && depth < 6; s = s->parent.get(), ++depth) {
+        std::string fns;
+        for (size_t i = 0; i < s->nfn; ++i) fns += std::string(i ? "," : "") + "\"" + s->fn[i] + "\"";
+        chain += std::string(depth ? "," : "") + "{\"thread\":" + std::to_string(s->thread) + ",\"fns\":[" + fns + "]}";
+    }
+    std::fprintf(events,
+        "{\"ev\":\"pi\",\"vi\":%llu,\"rom\":%u,\"ram\":%u,\"len\":%u,\"thread\":%u,\"req\":[%s]}\n",
+        (unsigned long long)vi_count.load(), rom, ram_addr, length, me, chain.c_str());
 }
 
 extern "C" void n64host_golden_finish() {
-    if (!on()) return;
+    if (!events) return;
     std::lock_guard g(lock);
     write_trace("final");
     std::fflush(events); std::fflush(acmd_all); std::fflush(pcm_all);

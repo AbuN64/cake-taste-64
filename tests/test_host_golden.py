@@ -19,6 +19,14 @@ class GoldenDocsTest(unittest.TestCase):
         self.assertIn("if (!d) return;", source)
         self.assertIn("if (!on()) return;", source)
 
+    def test_pi_events_name_their_requester(self):
+        source = (HOST / "golden.cpp").read_text(encoding="utf-8")
+        docs = (HOST / "RUNTIME.md").read_text(encoding="utf-8")
+        for field in ("req", "fns"):
+            self.assertIn(f'\\"{field}\\"', source)
+            self.assertIn(f"`{field}`", docs)
+        self.assertIn("n64host_golden_recv", (HOST / "queue_trace.cpp").read_text(encoding="utf-8"))
+
 
     def test_scripted_quit_flushes_then_exits_without_runtime_teardown(self):
         source = (HOST / "golden.cpp").read_text(encoding="utf-8")
