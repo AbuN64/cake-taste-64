@@ -4,7 +4,8 @@
 //   behave_harness RDRAM_IN CASES OUT_DIR     writes OUT_DIR/events.txt (exit 0, 2 bad input)
 // Cases grammar, numbers in hex, one directive per line:
 //   seed LO HI            memory the probe knows the content of (before the first case: for every case)
-//   case NAME             start a case; entry ADDR, reg rN|fN|status VALUE, mem ADDR HEXBYTES (guest order)
+//   case NAME             start a case; entry ADDR, reg rN|fN|status VALUE, mem ADDR HEXBYTES (guest order),
+//                         stubv NAME VALUE (the v0 a stub of that name returns in this case; default 0)
 //   go                    run the case
 // Events per case: call/stub NAME a0 a1 a2 a3 s0 s1 s2 s3 f12 f14, st ADDR WIDTH VALUE, rd ADDR WIDTH,
 // uns ADDR WIDTH (read outside the seeded ranges), net ADDR VALUE (every word that differs from the image
@@ -32,6 +33,10 @@ static sigjmp_buf stop;
 static char stop_what[64];
 static uint32_t stop_a, stop_b;
 
+typedef struct { char name[64]; uint32_t value; } stub_result;
+static stub_result stub_results[256];
+static int nstub_results;
+
 typedef struct { uint32_t lo, hi; } range;
 static range seeded[4096];
 static int nseeded, ncommon;
@@ -42,6 +47,10 @@ static struct { int on; uint32_t va; int w; uint8_t *p; uint32_t before; } pend;
 typedef struct { uint64_t slot[SLOTS]; int count, overflow; } keyset;
 static keyset reads, written;
 static uint64_t calls_seen;
+#define EVENT_BUDGET 20000
+static uint64_t events_written;          // call/stub/store lines written in this case
+static volatile sig_atomic_t printing;   // inside an event write: the alarm waits until it is whole
+static volatile sig_atomic_t alarm_late;
 static uint32_t last_va;
 static int keyset_add(keyset *s, uint64_t key) {
     if (s->count >= SLOTS / 2) { s->overflow = 1; return 0; }
@@ -62,6 +71,10 @@ static int keyset_has(const keyset *s, uint64_t key) {
 static uint32_t rd(const uint8_t *p, int w) { return w == 1 ? *p : w == 2 ? *(const uint16_t *)p : *(const uint32_t *)p; }
 
 static int seeded_at(uint32_t va);
+static void stop_case(const char *what, uint32_t a, uint32_t b);
+// A case that spins on calls or stores would write gigabytes of events: it ends once it has written enough.
+static void count_event(void) { if (++events_written > EVENT_BUDGET) stop_case("event-budget", 0, 0); }
+static void end_printing(void) { printing = 0; if (alarm_late) { alarm_late = 0; siglongjmp(stop, 2); } }
 static void mark_written(uint32_t va, int w) {
     for (uint32_t a = va & ~3u; a < va + (uint32_t)w; a += 4) keyset_add(&written, ((uint64_t)a << 1) | 1);
 }
@@ -73,7 +86,10 @@ static void settle(void) {
     last_va = pend.va;
     uint32_t now = rd(pend.p, pend.w);
     if (now != pend.before) {
+        count_event();
+        printing = 1;
         fprintf(out, "st %08X %d %X\n", pend.va, pend.w, now);
+        end_printing();
         mark_written(pend.va, pend.w);
         return;
     }
@@ -110,11 +126,20 @@ static void args_line(const char *kind, const char *name, uint8_t *mem, recomp_c
     uint32_t s[4] = {0, 0, 0, 0};
     if (sp >= 0x80000000u && (sp & 0x1FFFFFFFu) < 0x03F00000u)
         for (int i = 0; i < 4; ++i) s[i] = *(uint32_t *)n64host_ptr(mem, sp + 16 + 4 * i);
+    count_event();
+    printing = 1;
     fprintf(out, "%s %s %X %X %X %X %X %X %X %X %X %X\n", kind, name, (uint32_t)ctx->r4, (uint32_t)ctx->r5,
             (uint32_t)ctx->r6, (uint32_t)ctx->r7, s[0], s[1], s[2], s[3], ctx->f12.u32l, ctx->f14.u32l);
+    end_printing();
 }
 void behave_enter(const char *name, uint8_t *mem, recomp_context *ctx) { settle(); ++calls_seen; args_line("call", name, mem, ctx); }
-void behave_stub(const char *name, uint8_t *mem, recomp_context *ctx) { settle(); args_line("stub", name, mem, ctx); }
+void behave_stub(const char *name, uint8_t *mem, recomp_context *ctx) {
+    settle();
+    args_line("stub", name, mem, ctx);
+    ctx->r2 = 0;
+    for (int i = 0; i < nstub_results; ++i)
+        if (!strcmp(stub_results[i].name, name)) ctx->r2 = (gpr)(int64_t)(int32_t)stub_results[i].value;
+}
 
 recomp_func_t *get_function(int32_t vram) {
     for (const probe_func *p = probe_funcs; p->fn; ++p)
@@ -133,9 +158,12 @@ void cop0_status_write(recomp_context *ctx, gpr value) {
     ctx->f_odd = ctx->mips3_float_mode ? &ctx->f1.u32l : &ctx->f0.u32h;
 }
 
-static void on_alarm(int sig) { (void)sig; siglongjmp(stop, 2); }
+static void on_alarm(int sig) { (void)sig; if (printing) alarm_late = 1; else siglongjmp(stop, 2); }
 // N64Recomp's generated NaN checks are asserts: a case that reaches one is untestable, not a dead harness.
 static void on_abort(int sig) { (void)sig; siglongjmp(stop, 3); }
+// A host trap (the generated C divides where the MIPS divide leaves its result undefined; a wild host pointer)
+// ends the case, not the process: the other cases still run.
+static void on_trap(int sig) { siglongjmp(stop, sig == SIGFPE ? 4 : 5); }
 static gpr *gpr_slot(recomp_context *ctx, int i) { return &ctx->r0 + i; }
 static fpr *fpr_slot(recomp_context *ctx, int i) { return &ctx->f0 + i; }
 
@@ -160,7 +188,7 @@ static void run_case(casebuf *c, unsigned timeout_ms) {
     recomp_context ctx;
     memset(&ctx, 0, sizeof ctx);
     ctx.f_odd = &ctx.f0.u32h;
-    nseeded = ncommon; pend.on = 0; last_va = 0;
+    nseeded = ncommon; pend.on = 0; last_va = 0; nstub_results = 0; events_written = 0; printing = 0; alarm_late = 0;
     memset(&reads, 0, sizeof reads); memset(&written, 0, sizeof written);
     fprintf(out, "case %s\n", c->name);
     char *line = c->ops, *next;
@@ -174,6 +202,12 @@ static void run_case(casebuf *c, unsigned timeout_ms) {
             if (!strcmp(what, "status")) cop0_status_write(&ctx, (gpr)a);
             else if (what[0] == 'r' && sscanf(what + 1, "%d", &i) == 1 && i >= 0 && i < 32) *gpr_slot(&ctx, i) = (gpr)a;
             else if (what[0] == 'f' && sscanf(what + 1, "%d", &i) == 1 && i >= 0 && i < 32) fpr_slot(&ctx, i)->u64 = a;
+        } else if (!strncmp(line, "stubv ", 6)) {
+            char stub[64];
+            if (sscanf(line + 6, "%63s %llx", stub, &a) == 2 && nstub_results < 256) {
+                snprintf(stub_results[nstub_results].name, sizeof stub_results[0].name, "%s", stub);
+                stub_results[nstub_results++].value = (uint32_t)a;
+            }
         } else if (sscanf(line, "seed %llx %llx", &a, &b) == 2) {
             if (nseeded < 4096) { seeded[nseeded].lo = (uint32_t)a; seeded[nseeded++].hi = (uint32_t)b; }
         } else if (!strncmp(line, "mem ", 4)) {
@@ -198,6 +232,9 @@ static void run_case(casebuf *c, unsigned timeout_ms) {
     struct itimerval timer = {{0, 0}, {timeout_ms / 1000, (timeout_ms % 1000) * 1000}};
     signal(SIGALRM, on_alarm);
     signal(SIGABRT, on_abort);
+    signal(SIGFPE, on_trap);
+    signal(SIGSEGV, on_trap);
+    signal(SIGBUS, on_trap);
     int jumped = sigsetjmp(stop, 1);
     if (!jumped) {
         recomp_func_t *fn = get_function((int32_t)c->entry);
@@ -211,6 +248,8 @@ static void run_case(casebuf *c, unsigned timeout_ms) {
         pend.on = 0;
         if (jumped == 2) { status = "timeout"; snprintf(detail, sizeof detail, "no return within %u ms", timeout_ms); }
         else if (jumped == 3) { status = "fatal"; snprintf(detail, sizeof detail, "check failed (NaN operand) last %08X", last_va); }
+        else if (jumped == 4) { status = "fatal"; snprintf(detail, sizeof detail, "integer divide trap last %08X", last_va); }
+        else if (jumped == 5) { status = "fatal"; snprintf(detail, sizeof detail, "host memory trap last %08X", last_va); }
         else {
             status = !strcmp(stop_what, "mmio") ? "mmio" : !strcmp(stop_what, "unmapped") ? "unmapped" : "fatal";
             snprintf(detail, sizeof detail, "%s %08X %X last %08X", stop_what, stop_a, stop_b, last_va);

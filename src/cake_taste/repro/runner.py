@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -90,10 +91,10 @@ def run_command(
     root.mkdir(parents=True, exist_ok=True)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+b") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as error:
-            raise RuntimeError("another isolated repro is running") from error
+        waiting = time.monotonic()
+        # one isolated repro at a time: a later caller sleeps in the kernel until the holder ends
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        waited = round(time.monotonic() - waiting, 3)
         run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
         run_dir = root / run_id
         run_dir.mkdir()
@@ -117,6 +118,7 @@ def run_command(
             "expected_exit_code": expected_exit_code,
             "artifacts": [],
             "error": None,
+            "lock_wait_seconds": waited,
         }
         _atomic_json(status_path, record)
         append_event(profile, "repro", "started", name + ": " + shlex.join(command), str(receipt))

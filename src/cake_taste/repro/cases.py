@@ -117,14 +117,19 @@ def cases_text(
     common_seed: list[tuple[int, int]],
     sp: int,
     timeout_ms: int,
+    stub_v0: dict[str, int] | None = None,
 ) -> str:
-    """The harness cases file: shared seeded ranges, then each case's registers, stack words and memory patches."""
+    """The harness cases file: shared seeded ranges, then each case's registers, stack words and memory patches,
+    and the v0 each stub returns (the request's `stub_v0` for every case, a case's own `stub_v0` over it)."""
     lines = [f"timeout {timeout_ms}"] + [f"seed {lo:X} {hi:X}" for lo, hi in common_seed]
     for index, item in enumerate(cases):
         name = str(item.get("name", f"case{index}"))
         regs = registers({"registers": item.get("registers", {})}, sp, {})
         merged = {**regs_base, **regs}
         lines += [f"case {name}", f"entry {entry:X}"]
+        own = {str(k): _int(v, f"cases[{index}].stub_v0.{k}") for k, v in item.get("stub_v0", {}).items()}
+        answers = {**(stub_v0 or {}), **own}
+        lines += [f"stubv {key} {value & 0xFFFFFFFF:X}" for key, value in sorted(answers.items())]
         lines += [f"reg {key} {value:X}" for key, value in sorted(merged.items())]
         for number, word in enumerate(item.get("stack", [])):
             address = sp + 16 + 4 * number
@@ -185,7 +190,7 @@ def cases_probe(profile: Any, *, function: str | None, script: Path) -> dict[str
         limit=int(request.get("max_functions", config.get("max_functions", 256))),
     )
     include = '#include "recomp.h"\n#include "behave.h"'
-    unit = render_unit(found, vrams, include, True, stub_v0, headers=())
+    unit = render_unit(found, vrams, include, True, stub_v0, headers=(), runtime_v0=True)
 
     memory_end = _int(request.get("memory_end", _RAM_END + int(boot["rdram_size"])), "memory_end")
     memory = Memory(max(int(boot["rdram_size"]), memory_end - _RAM_END), boot.get("tlb", []))
@@ -213,7 +218,7 @@ def cases_probe(profile: Any, *, function: str | None, script: Path) -> dict[str
     regs_base = registers({}, sp, boot.get("registers", {}))
     before = bytes(memory.data)
     timeout_ms = int(float(request.get("timeout_seconds", 2)) * 1000)
-    cases_file = cases_text(cases, regs_base, entry, seeded, sp, timeout_ms)
+    cases_file = cases_text(cases, regs_base, entry, seeded, sp, timeout_ms, stub_v0)
 
     header = host_profile_header(boot)
     host = profile.resolve_path(config["host_dir"])
@@ -252,6 +257,7 @@ def cases_probe(profile: Any, *, function: str | None, script: Path) -> dict[str
             }
     binary = work / "harness"
     build_receipt = None
+    waited = 0.0  # seconds spent queued behind other isolated repros
     if not binary.is_file():
         build = [
             str(config.get("cc", "cc")),
@@ -275,6 +281,7 @@ def cases_probe(profile: Any, *, function: str | None, script: Path) -> dict[str
             profile, name=f"behave {root} build", function=root, command=build, artifacts=[work / "closure.c"]
         )
         build_receipt = built["receipt"]
+        waited += built["status"]["lock_wait_seconds"]
         if built["status"]["phase"] != "passed":
             raise TasteError("repro.failed", f"behave build failed; receipt: {build_receipt}")
     ran = run_command(
@@ -284,12 +291,13 @@ def cases_probe(profile: Any, *, function: str | None, script: Path) -> dict[str
         command=[str(binary), str(work / "rdram.bin"), str(work / "cases.txt"), "."],
         artifacts=[Path("events.txt")],
     )
+    waited += ran["status"]["lock_wait_seconds"]
     run_dir = Path(ran["status"]["run_dir"])
     if ran["status"]["phase"] != "passed":
         raise TasteError("repro.failed", f"behave run failed; receipt: {ran['receipt']}")
     results = parse_events((run_dir / "events.txt").read_text())
     for result, item in zip(results, cases, strict=True):
-        result["inputs"] = {k: item[k] for k in ("registers", "stack", "memory") if k in item}
+        result["inputs"] = {k: item[k] for k in ("registers", "stack", "memory", "stub_v0") if k in item}
     probe_dir = run_dir / "probe"
     cases_path = probe_dir / "cases.json"
     atomic_json(cases_path, results, sort_keys=True)
@@ -315,6 +323,7 @@ def cases_probe(profile: Any, *, function: str | None, script: Path) -> dict[str
         "cases_sha256": sha256_file(cases_path),
         "build_receipt": build_receipt,
         "wall_seconds": round(time.monotonic() - started, 3),
+        "lock_wait_seconds": round(waited, 3),
         "sp": sp,
         "stack_window": window,
         "cached": False,

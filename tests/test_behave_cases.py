@@ -88,6 +88,16 @@ class EventTests(unittest.TestCase):
         self.assertIn("mem 80A00000 00000001", lines)
         self.assertEqual(lines[-1], "go")
 
+    def test_each_case_names_what_its_stubs_return(self):
+        rows = [{"name": "c0", "stub_v0": {"get": 0x80A01000}}, {"name": "c1"}, {"name": "c2", "stub_v0": {"get": 0}}]
+        text = cases.cases_text(rows, {}, 0x80001000, [], 0x80400000, 1500, {"get": 7, "other": 9})
+        by_case = [chunk.splitlines() for chunk in text.split("case ")[1:]]
+        self.assertEqual([[x for x in c if x.startswith("stubv")] for c in by_case], [
+            ["stubv get 80A01000", "stubv other 9"],
+            ["stubv get 7", "stubv other 9"],
+            ["stubv get 0", "stubv other 9"],
+        ])
+
 
 class ClosureTests(unittest.TestCase):
     def test_depth_limits_how_far_original_callees_run(self):
@@ -104,6 +114,14 @@ class ClosureTests(unittest.TestCase):
             "deep": body("deep"),
         }
         self.assertEqual(limit_depth("behave_a", bodies, 1, same_unit="behave_"), {"deep"})
+
+    def test_a_stub_leaves_v0_to_its_hook_when_the_probe_answers_per_run(self):
+        found = closure("root", {"root": body("root", "leaf")})
+        fixed = render_unit(found, {"root": 0x80001000}, '#include "recomp.h"', True, {"leaf": 5})
+        self.assertIn("ctx->r2 = (gpr)(int64_t)5;", fixed)
+        runtime = render_unit(found, {"root": 0x80001000}, '#include "recomp.h"', True, {"leaf": 5}, runtime_v0=True)
+        self.assertIn('probe_stub("leaf");', runtime)
+        self.assertNotIn("ctx->r2", runtime)
 
     def test_a_probe_unit_can_use_its_own_headers(self):
         found = closure("root", {"root": body("root")})
@@ -251,7 +269,7 @@ class FlowTests(unittest.TestCase):
                     (run_dir / "events.txt").write_text(EVENTS)
                 return {
                     "receipt": str(run_dir / "receipt.json"),
-                    "status": {"phase": "passed", "run_dir": str(run_dir), "artifacts": []},
+                    "status": {"phase": "passed", "run_dir": str(run_dir), "artifacts": [], "lock_wait_seconds": 1.5},
                 }
 
             def probe():
@@ -269,6 +287,7 @@ class FlowTests(unittest.TestCase):
                 ("cases", 2, {"ok": 1, "unmapped": 1}, False),
             )
             self.assertEqual((record["sp"], record["stack_window"]), (0x800007F0, 0x4000))
+            self.assertEqual(record["lock_wait_seconds"], 3.0)  # queued 1.5 s for the build and 1.5 s for the run
             frozen = json.loads(Path(record["cases_path"]).read_text())
             self.assertEqual(frozen[0]["inputs"]["registers"], {"a0": 5})
             self.assertEqual(len(commands), 2)  # build, run

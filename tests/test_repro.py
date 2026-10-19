@@ -1,9 +1,11 @@
+import fcntl
 import hashlib
 import io
 import json
 import os
 import shutil
 import tempfile
+import threading
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -35,6 +37,29 @@ class Profile:
 
 
 class ReproTests(unittest.TestCase):
+    def test_a_second_isolated_repro_waits_for_the_lock_and_reports_the_wait(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            held, release = threading.Event(), threading.Event()
+
+            def other_repro():
+                with (root / "repro.lock").open("a+b") as lock:
+                    fcntl.flock(lock, fcntl.LOCK_EX)
+                    held.set()
+                    release.wait(10)
+
+            thread = threading.Thread(target=other_repro)
+            (root / "repro.lock").touch()
+            thread.start()
+            held.wait(10)
+            threading.Timer(0.4, release.set).start()
+            result = run_command(Profile(root), name="queued", command=["/bin/true"])
+            thread.join()
+            assert result["status"]["phase"] == "passed"
+            assert result["status"]["lock_wait_seconds"] >= 0.3
+            alone = run_command(Profile(root), name="alone", command=["/bin/true"])
+            assert alone["status"]["lock_wait_seconds"] < 0.3
+
     def test_real_isolated_process_receipt_and_factual_events(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -120,10 +120,13 @@ def render_unit(
     trace_mode: bool,
     stub_v0: dict[str, int],
     headers: tuple[str, ...] | None = None,
+    runtime_v0: bool = False,
 ) -> str:
     """One C unit: includes, prototypes, stubs, selected bodies and a vram table for get_function.
 
-    `headers` replaces the bounded probe's own two includes (bounded.h, trace.h) for a probe with its own hooks."""
+    `headers` replaces the bounded probe's own two includes (bounded.h, trace.h) for a probe with its own hooks.
+    With `runtime_v0` a stub leaves v0 to its probe hook (which can answer differently per run); otherwise it
+    returns the constant from `stub_v0`, default 0."""
     names = sorted(found.bodies) + sorted(found.stubs)
     own = [f'#include "{name}"' for name in headers] if headers is not None else [
         '#include "bounded.h"', '#include "trace.h"' if trace_mode else ""]
@@ -133,7 +136,8 @@ def render_unit(
     for name in sorted(found.stubs):
         value = stub_v0.get(name, 0)
         signature = f"void {name}(uint8_t* rdram, recomp_context* ctx)"
-        lines.append(f'{signature} {{ probe_stub("{name}"); ctx->r2 = (gpr)(int64_t){value}; }}')
+        result = "" if runtime_v0 else f" ctx->r2 = (gpr)(int64_t){value};"
+        lines.append(f'{signature} {{ probe_stub("{name}");{result} }}')
     lines.append("")
     lines += [found.bodies[name] for name in sorted(found.bodies)]
     lines.append("const probe_func probe_funcs[] = {")
