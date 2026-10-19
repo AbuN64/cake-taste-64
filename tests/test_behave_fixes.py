@@ -15,6 +15,10 @@ class HarnessInputTests(unittest.TestCase):
         self.assertNotIn("budget", text)
         self.assertNotIn("lenient", text)
 
+    def test_stack_window_line_precedes_the_seeds(self):
+        frame = (0x803FC000, 0x80400010)
+        text = cases.cases_text([{"name": "a"}], {}, 0x80001000, [(1, 2)], 0x80400000, 2000, None, None, False, frame)
+        self.assertEqual(text.splitlines()[:2], ["timeout 2000", "stack 803FC000 80400010"])
     def test_the_events_line_is_the_written_count(self):
         got = cases.parse_events("case c\nevents 123\nend ok\n")
         self.assertEqual(got[0]["events_written"], 123)

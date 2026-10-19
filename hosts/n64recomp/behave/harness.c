@@ -57,6 +57,8 @@ static uint8_t scratch[16];
 static char indirect_name[32];
 static uint64_t event_budget = DEFAULT_EVENT_BUDGET;   // `budget N` in the cases file replaces it
 static uint64_t events_written;          // call/stub/store lines written in this case
+static uint32_t stack_lo, stack_hi;      // `stack LO HI`: stores in this window are the dead frame, counted at 16x the budget
+static uint64_t stack_events;          // stores in the stack window written in this case
 static volatile sig_atomic_t printing;   // inside an event write: the alarm waits until it is whole
 static volatile sig_atomic_t alarm_late;
 static uint32_t last_va;
@@ -94,7 +96,8 @@ static void settle(void) {
     last_va = pend.va;
     uint32_t now = rd(pend.p, pend.w);
     if (now != pend.before) {
-        count_event();
+        if (pend.va >= stack_lo && pend.va < stack_hi) { if (++stack_events > 16 * event_budget) stop_case("event-budget", 0, 0); }
+        else count_event();
         printing = 1;
         fprintf(out, "st %08X %d %X\n", pend.va, pend.w, now);
         end_printing();
@@ -231,7 +234,7 @@ static void run_case(casebuf *c, unsigned timeout_ms) {
     recomp_context ctx;
     memset(&ctx, 0, sizeof ctx);
     ctx.f_odd = &ctx.f0.u32h;
-    nseeded = ncommon; pend.on = 0; last_va = 0; nstub_results = 0; nstub_calls = 0; events_written = 0; printing = 0; alarm_late = 0;
+    nseeded = ncommon; pend.on = 0; last_va = 0; nstub_results = 0; nstub_calls = 0; events_written = 0; stack_events = 0; printing = 0; alarm_late = 0;
     memset(&reads, 0, sizeof reads); memset(&written, 0, sizeof written);
     fprintf(out, "case %s\n", c->name);
     char *line = c->ops, *next;
@@ -363,6 +366,7 @@ int main(int argc, char **argv) {
         char name[256];
         if (sscanf(text, "timeout %llu", &a) == 1) timeout_ms = (unsigned)a;
         else if (sscanf(text, "budget %llu", &a) == 1 && a > 0) event_budget = a;
+        else if (sscanf(text, "stack %llx %llx", &a, &b) == 2) { stack_lo = (uint32_t)a; stack_hi = (uint32_t)b; }
         else if (sscanf(text, "lenient %llu", &a) == 1) lenient = a != 0;
         else if (!open && sscanf(text, "seed %llx %llx", &a, &b) == 2 && nseeded < 4096) {
             seeded[nseeded].lo = (uint32_t)a; seeded[nseeded++].hi = (uint32_t)b; ncommon = nseeded;

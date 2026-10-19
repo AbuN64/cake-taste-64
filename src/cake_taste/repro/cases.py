@@ -122,12 +122,14 @@ def cases_text(
     stub_v0: dict[str, int] | None = None,
     event_budget: int | None = None,
     lenient: bool = False,
+    stack: tuple[int, int] | None = None,
 ) -> str:
     """The harness cases file: shared seeded ranges, then each case's registers, stack words and memory patches,
     and the v0 each stub returns (the request's `stub_v0` for every case, a case's own `stub_v0` over it)."""
     lines = [f"timeout {timeout_ms}"]
     lines += [f"budget {event_budget}"] if event_budget else []
     lines += ["lenient 1"] if lenient else []
+    lines += [f"stack {stack[0]:X} {stack[1]:X}"] if stack else []
     lines += [f"seed {lo:X} {hi:X}" for lo, hi in common_seed]
     for index, item in enumerate(cases):
         name = str(item.get("name", f"case{index}"))
@@ -227,7 +229,8 @@ def cases_probe(profile: Any, *, function: str | None, script: Path) -> dict[str
     timeout_ms = int(float(request.get("timeout_seconds", 2)) * 1000)
     event_budget = int(request["event_budget"]) if request.get("event_budget") else None
     lenient = bool(request.get("lenient"))
-    cases_file = cases_text(cases, regs_base, entry, seeded, sp, timeout_ms, stub_v0, event_budget, lenient)
+    frame = (sp - window, sp + 0x10)
+    cases_file = cases_text(cases, regs_base, entry, seeded, sp, timeout_ms, stub_v0, event_budget, lenient, frame)
 
     header = host_profile_header(boot)
     host = profile.resolve_path(config["host_dir"])
