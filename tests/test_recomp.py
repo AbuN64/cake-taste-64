@@ -69,7 +69,7 @@ def row(rom, vram):
     return f"    /* {rom:X} {vram:08X} 03E00008 */  jr $ra\n"
 
 
-def build(root: Path, tool_body: str = "") -> object:
+def build(root: Path, tool_body: str = "", rsp_config: dict | None = None) -> object:
     decomp = root / "decomp"
     (decomp / "versions/v1").mkdir(parents=True)
     (decomp / "asm/v1").mkdir(parents=True)
@@ -103,7 +103,7 @@ def build(root: Path, tool_body: str = "") -> object:
                 "trace_mode": True,
                 "recomp_include": '#include "probe.h"',
                 "stubs": ["osStub"],
-                "rsp_audio": {"segment": "rsp_code", "function": "rsp_fn"},
+                "rsp_audio": rsp_config or {"segment": "rsp_code", "function": "rsp_fn"},
             }
 
         def resolve_path(self, value):
@@ -193,6 +193,126 @@ class RecompTests(unittest.TestCase):
             self.assertFalse((Path(t) / "gen/v1/probe.toml").exists())
         self.assertEqual(result["refused"], 1)
         self.assertIn("first\tN64Recomp died with signal 11 while analysing first", tsv)
+
+    def test_refused_static_is_declared_with_a_decomp_sourced_extent_then_ignored(self):
+        body = (
+            "#!/bin/sh\n"
+            "if grep -q '\"static_0_8020040C\"' \"$1\"; then\n"
+            "  grep -q static_0_8020040C symbols.toml || { echo 'Function static_0_8020040C is set as ignored"
+            " in the config file but does not exist!' >&2; exit 1; }\n"
+            "  echo 'Function count: 5'; echo x > funcs/f.c; exit 0\nfi\n"
+            "echo 'Unhandled cop0 register in mtc0: 14' >&2\necho 'Error recompiling static_0_8020040C' >&2\nexit 1\n"
+        )
+        with tempfile.TemporaryDirectory() as t:
+            profile = build(Path(t), body)
+            result = run(profile, ("generate", "--version", "v1"))
+            out = Path(t) / "gen/v1"
+            statics = (out / "statics.tsv").read_text().splitlines()
+            symbols = tomllib.loads((out / "symbols.toml").read_text())
+            refused = (out / "refused.tsv").read_text()
+        self.assertEqual(result["refused"], 1)
+        self.assertEqual(refused, "name\treason\nstatic_0_8020040C\tUnhandled cop0 register in mtc0: 14\n")
+        fields = statics[1].split("\t")
+        self.assertEqual(fields[:3], ["static_0_8020040C", "0x8020040C", "0x4"])
+        self.assertIn("next split rodata/x at 0x80200410", fields[3])
+        funcs = {f["name"]: f for f in symbols["section"][0]["functions"]}
+        self.assertEqual(funcs["static_0_8020040C"]["size"], 4)
+
+    def test_rsp_microcode_may_be_a_sourced_rom_span_outside_the_layout(self):
+        span = {"function": "rsp_fn", "rom": 0x4000, "size": 0x20, "execution_vram": 0x1080, "source": "task fields",
+                "extra_indirect_branch_targets": [0x1100]}
+        with tempfile.TemporaryDirectory() as t:
+            profile = build(Path(t), rsp_config=span)
+            result = run(profile, ("generate", "--version", "v1"))
+            config = (Path(t) / "gen/v1/rsp.toml").read_text()
+        self.assertEqual(result["rsp"]["segment"], "rom_4000")
+        for line in ("text_offset = 0x4000", "text_size = 0x20", "text_address = 0x1080",
+                     "extra_indirect_branch_targets = [4352]"):
+            self.assertIn(line, config)
+
+    def test_rsp_rom_span_needs_a_source_and_an_execution_address(self):
+        for bad in ({"function": "f", "rom": 0x4000, "size": 0x20, "execution_vram": 0x1080},
+                    {"function": "f", "rom": 0x4000, "size": 0x20, "source": "x"},
+                    {"function": "f", "rom": 0x4000, "segment": "rsp_code", "size": 0x20}):
+            with tempfile.TemporaryDirectory() as t, self.assertRaises(TasteError):
+                run(build(Path(t), rsp_config=bad), ("symbols", "--version", "v1"))
+
+    def test_generated_c_that_cannot_compile_refuses_its_function(self):
+        body = (
+            "#!/bin/sh\n"
+            "echo 'Function count: 5'\n"
+            "ok='RECOMP_FUNC void fine(uint8_t* rdram, recomp_context* ctx) {\n  goto L_1;\nL_1:\n  return;\n;}'\n"
+            "zero='RECOMP_FUNC void zero_dest(uint8_t* rdram, recomp_context* ctx) {\n  0 = do_ldr(rdram);\n;}'\n"
+            "away='RECOMP_FUNC void away(uint8_t* rdram, recomp_context* ctx) {\n  goto L_800F1010;\n;}'\n"
+            "printf '%s\\n' \"$ok\" > funcs/f.c\n"
+            "grep -q '\"zero_dest\"' \"$1\" || printf '%s\\n' \"$zero\" >> funcs/f.c\n"
+            "grep -q '\"away\"' \"$1\" || printf '%s\\n' \"$away\" >> funcs/f.c\n"
+        )
+        with tempfile.TemporaryDirectory() as t:
+            profile = build(Path(t), body)
+            result = run(profile, ("generate", "--version", "v1"))
+            tsv = (Path(t) / "gen/v1/refused.tsv").read_text()
+        self.assertEqual(result["refused"], 2)
+        self.assertIn("zero_dest\tgenerated C assigns to the zero register", tsv)
+        self.assertIn("away\tgenerated C branches to L_800F1010, a label outside the function", tsv)
+        self.assertNotIn("fine\t", tsv)
+
+    def test_calls_into_the_runtime_are_declared_for_the_generated_code(self):
+        body = ("#!/bin/sh\necho 'Function count: 5'\n"
+                "printf 'RECOMP_FUNC void a(uint8_t* rdram, recomp_context* ctx) {\\n"
+                "  osYieldThread_recomp(rdram, ctx);\\n  osYieldThread_recomp(rdram, ctx);\\n"
+                "  osStartThread_recomp(rdram, ctx);\\n;}\\n' > funcs/f.c\n")
+        with tempfile.TemporaryDirectory() as t:
+            profile = build(Path(t), body)
+            section = profile.section
+            profile.section = lambda name: {**section(name), "symbol_names": {"v1": {"0x80200408": "osPiRawStartDma"}}}
+            run(profile, ("generate", "--version", "v1"))
+            header = (Path(t) / "gen/v1/funcs/recomp_decls.h").read_text()
+            table = (Path(t) / "gen/v1/funcs/replaced_funcs.inl").read_text()
+        self.assertEqual(header.count("osYieldThread_recomp"), 1)
+        self.assertIn("void osStartThread_recomp(uint8_t* rdram, recomp_context* ctx);", header)
+        self.assertIn("void osPiRawStartDma_recomp(uint8_t* rdram, recomp_context* ctx);", header)
+        self.assertIn("{ 0x80200408u, osPiRawStartDma_recomp },", table)
+        self.assertTrue(table.rstrip().endswith("{ 0u, nullptr }"))
+
+    def test_backward_branches_get_a_service_point_forward_ones_do_not(self):
+        body = ("#!/bin/sh\necho 'Function count: 5'\n"
+                "printf 'RECOMP_FUNC void spin(uint8_t* rdram, recomp_context* ctx) {\\n"
+                "L_1:\\n  if (x) {\\n    goto L_1;\\n  }\\n  if (y) {\\n    goto L_2;\\n  }\\nL_2:\\n  return;\\n;}\\n'"
+                " > funcs/f.c\n")
+        with tempfile.TemporaryDirectory() as t:
+            result = run(build(Path(t), body), ("generate", "--version", "v1"))
+            code = (Path(t) / "gen/v1/funcs/f.c").read_text()
+            manifest = json.loads((Path(t) / "gen/v1/MANIFEST.json").read_text())
+        self.assertIn("TRACE_LOOP() goto L_1;", code)
+        self.assertNotIn("TRACE_LOOP() goto L_2;", code)
+        self.assertEqual(manifest["loop_service_points"], 1)
+        self.assertEqual(result["refused"], 0)
+
+    def test_symbol_names_may_carry_their_source_and_must_not_be_empty(self):
+        with tempfile.TemporaryDirectory() as t:
+            profile = build(Path(t))
+            section = profile.section
+            profile.section = lambda name: {**section(name), "symbol_names": {"v1": {
+                "0x80200400": {"name": "osFirst", "source": "same body as the donor's osFirst"},
+                "0x80200408": "osSecond"}}}
+            run(profile, ("symbols", "--version", "v1"))
+            data = tomllib.loads((Path(t) / "gen/v1/symbols.toml").read_text())
+            names = [f["name"] for f in data["section"][0]["functions"]]
+            self.assertEqual(names, ["osFirst", "osSecond"])
+            for bad in ({"0x80200400": {"name": "x"}}, {"0x80200400": ""},
+                        {"0x80200400": {"name": "x", "source": ""}}):
+                profile.section = lambda name, bad=bad: {**section(name), "symbol_names": {"v1": bad}}
+                with self.assertRaises(TasteError):
+                    run(profile, ("symbols", "--version", "v1"))
+
+    def test_static_inside_a_known_function_is_a_named_error(self):
+        body = "#!/bin/sh\necho 'Error recompiling static_0_80200404' >&2\nexit 1\n"
+        with tempfile.TemporaryDirectory() as t:
+            profile = build(Path(t), body)
+            with self.assertRaises(TasteError) as raised:
+                run(profile, ("generate", "--version", "v1"))
+        self.assertIn("inside first", str(raised.exception))
 
     def test_unattributable_failure_is_a_named_error(self):
         with tempfile.TemporaryDirectory() as t:

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from cake_taste import TasteError
 
-from .asmfuncs import Function, read_functions, read_symbol_names
+from .asmfuncs import Function, read_function_addresses, read_functions, read_symbol_names
 from .splat import Layout, Segment
 
 
@@ -29,6 +29,7 @@ def build_sections(
     rom_size: int | None = None,
     overrides: dict[int, str] | None = None,
     sizes: dict[int, int] | None = None,
+    statics: dict[int, str] | None = None,
 ) -> tuple[list[Section], dict[str, int]]:
     names = {**read_symbol_names(symbols_file), **(overrides or {})}
     ordered = sorted(layout.segments, key=lambda s: s.start)
@@ -62,6 +63,8 @@ def build_sections(
         if used[name] > 1:
             name = f"{name}_{function.vram:08X}"
         grouped[owner.name].append(Function(name, function.rom, function.vram, extent))
+    for vram, name in sorted((statics or {}).items()):
+        _add_static(layout, spans, grouped, symbols_file, vram, name)
     if unused_sizes:
         raise TasteError("recomp.sections", f"function_sizes addresses absent from functions: {sorted(unused_sizes)}")
     sections = [
@@ -74,6 +77,31 @@ def build_sections(
         "renamed_from_symbols": renamed,
         "duplicate_names": sum(1 for v in used.values() if v > 1),
     }
+
+
+def _add_static(layout, spans, grouped, symbols_file, vram, name) -> None:
+    """Make code the disassembly left in a data split a function, sized by the decomp's own boundaries.
+
+    The recompiler finds such a target only while analysing the code that jumps to it, so it can neither
+    be ignored nor sized by the config. Its extent runs to the nearest boundary the decomp states after it:
+    the next function, the next symbol typed as a function, the next split of the segment, or the segment end.
+    """
+    owners = [(s, size) for s, size in spans if s.vram is not None and s.vram <= vram < s.vram + size]
+    owners = [(s, size) for s, size in owners if grouped[s.name]]
+    if len(owners) != 1:
+        raise TasteError("recomp.statics", f"{name}: 0x{vram:08X} is in {len(owners)} code sections, expected 1")
+    owner, size = owners[0]
+    for f in grouped[owner.name]:
+        if f.vram <= vram < f.vram + f.size:
+            raise TasteError("recomp.statics", f"{name}: 0x{vram:08X} is inside {f.name}, not between functions")
+    after: list[tuple[int, str]] = [(f.vram, f"next function {f.name}") for f in grouped[owner.name] if f.vram > vram]
+    after += [(a, f"next function symbol 0x{a:08X}") for a in read_function_addresses(symbols_file) if a > vram]
+    after += [(owner.vram + start - owner.start, f"next split {path or kind}")
+              for start, kind, path in owner.subsegments if owner.vram + start - owner.start > vram]
+    after.append((owner.vram + size, f"end of {owner.name}"))
+    end, why = min(after)
+    grouped[owner.name].append(Function(name, owner.start + vram - owner.vram, vram, end - vram,
+                                        f"extent to {why} at 0x{end:08X}"))
 
 
 _FLAT_KINDS = frozenset({"code", "resource"})

@@ -54,6 +54,8 @@ class Settings:
 
     rsp_indirect_targets: tuple[int, ...] = ()
     rsp_execution_vram: int | None = None
+    rsp_rom: int | None = None  # microcode text given as a sourced ROM span instead of a layout segment
+    rsp_size: int | None = None
 
     def sizes_for(self, version: str) -> dict[int, int]:
         return self.function_sizes.get(version, {})
@@ -105,10 +107,16 @@ def load(profile: Any) -> Settings:
     if entry is not None and (type(entry) is not int or entry < 0 or entry & 3):
         raise TasteError("config.schema", "recomp.entrypoint: expected a word-aligned integer")
     rsp = raw.get("rsp_audio")
-    if rsp is not None and (not isinstance(rsp, dict) or not {"segment", "function"} <= rsp.keys()
+    if rsp is not None and (not isinstance(rsp, dict) or "function" not in rsp or ("segment" in rsp) == ("rom" in rsp)
                             or rsp.keys() - {"segment", "function", "extra_indirect_branch_targets",
-                                             "source", "execution_vram"}):
-        raise TasteError("config.schema", "recomp.rsp_audio: expected segment, function and optional sourced targets")
+                                             "source", "execution_vram", "rom", "size"}):
+        raise TasteError("config.schema", "recomp.rsp_audio: expected function, a segment or a rom span, and targets")
+    if rsp is not None and "rom" in rsp:
+        rom, size = rsp["rom"], rsp.get("size")
+        if (type(rom) is not int or type(size) is not int or rom < 0 or rom & 3 or size <= 0 or size & 3
+                or not rsp.get("source") or rsp.get("execution_vram") is None):
+            raise TasteError("config.schema", "recomp.rsp_audio rom span needs aligned rom and size, source and "
+                             "execution_vram")
     targets = rsp.get("extra_indirect_branch_targets", []) if rsp else []
     if (not isinstance(targets, list)
             or any(type(t) is not int or not 0x1000 <= t < 0x2000 or t & 3 for t in targets)
@@ -126,15 +134,21 @@ def load(profile: Any) -> Settings:
     if include is not None and not isinstance(include, str):
         raise TasteError("config.schema", "recomp.recomp_include: expected a string")
     names = raw.get("symbol_names", {})
-    if not isinstance(names, dict) or not all(
-        isinstance(v, dict) and all(isinstance(a, str) and isinstance(n, str) and n for a, n in v.items())
-        for v in names.values()
-    ):
+    if not isinstance(names, dict) or not all(isinstance(v, dict) for v in names.values()):
         raise TasteError("config.schema", "recomp.symbol_names: expected version to {address: name} objects")
-    try:
-        symbol_names = {str(ver): {int(a, 0): n for a, n in m.items()} for ver, m in names.items()}
-    except ValueError as error:
-        raise TasteError("config.schema", f"recomp.symbol_names: bad address ({error})") from error
+    symbol_names: dict[str, dict[int, str]] = {}
+    for ver, mapping in names.items():
+        symbol_names[str(ver)] = {}
+        for address, item in mapping.items():
+            # A name is a string, or {"name", "source"} when the evidence for it travels with it.
+            name = item.get("name") if isinstance(item, dict) else item
+            source_ok = not isinstance(item, dict) or (isinstance(item.get("source"), str) and item["source"])
+            if not isinstance(address, str) or not isinstance(name, str) or not name or not source_ok:
+                raise TasteError("config.schema", "recomp.symbol_names: expected address to name or {name, source}")
+            try:
+                symbol_names[str(ver)][int(address, 0)] = name
+            except ValueError as error:
+                raise TasteError("config.schema", f"recomp.symbol_names: bad address ({error})") from error
     sections = raw.get("function_sections", {})
     if not isinstance(sections, dict) or not all(isinstance(v, str) and v for v in sections.values()):
         raise TasteError("config.schema", "recomp.function_sections: expected version to path objects")
@@ -165,7 +179,7 @@ def load(profile: Any) -> Settings:
         recomp_include=include,
         stubs=_strings(raw.get("stubs", []), "stubs"),
         ignored=_strings(raw.get("ignored", []), "ignored"),
-        rsp_segment=rsp["segment"] if rsp else None,
+        rsp_segment=rsp.get("segment") if rsp else None,
         rsp_function=rsp["function"] if rsp else None,
         functions_per_output_file=per_file,
         max_refusals=refusals,
@@ -175,4 +189,6 @@ def load(profile: Any) -> Settings:
         local_indirect_jumps=raw.get("local_indirect_jumps", {}),
         rsp_indirect_targets=tuple(targets),
         rsp_execution_vram=execution,
+        rsp_rom=rsp.get("rom") if rsp else None,
+        rsp_size=rsp.get("size") if rsp else None,
     )

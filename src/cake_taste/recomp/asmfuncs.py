@@ -19,6 +19,7 @@ class Function:
     rom: int
     vram: int
     size: int
+    source: str = ""  # where a derived extent came from; empty for functions the disassembly delimits
 
 
 def parse_asm(path: Path) -> list[Function]:
@@ -68,3 +69,13 @@ def read_symbol_names(path: Path) -> dict[int, str]:
         address = int(match.group(2), 0)
         (typed if "type:func" in match.group(3) else other).setdefault(address, match.group(1))
     return {**other, **typed}
+
+
+def read_function_addresses(path: Path) -> list[int]:
+    """Addresses the symbol list types as functions, sorted: every one is a function boundary."""
+    found = set()
+    for line in path.read_text().splitlines():
+        match = _SYMBOL.match(line)
+        if match and "type:func" in match.group(3):
+            found.add(int(match.group(2), 0))
+    return sorted(found)

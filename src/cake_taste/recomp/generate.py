@@ -20,6 +20,7 @@ from .settings import Settings
 from .splat import Layout, parse_layout
 from .supplement import read_sections
 
+_STATIC = re.compile(r"^static_\d+_([0-9A-Fa-f]{8})$")
 _FAILED = re.compile(r"^(?:Error recompiling|Failed to analyze) (\S+?),?$")
 
 
@@ -42,17 +43,18 @@ def load_layout(settings: Settings, version: str) -> Layout:
     return Layout(base.sha1, tuple(merged))
 
 
-def build(settings: Settings, version: str) -> tuple[Layout, list[Section], dict[str, int]]:
+def build(settings: Settings, version: str,
+          statics: dict[int, str] | None = None) -> tuple[Layout, list[Section], dict[str, int]]:
     layout = load_layout(settings, version)
     rom = settings.rom(version)
     size = rom.stat().st_size if rom.is_file() else None
     sections, counts = build_sections(layout, settings.asm_path(version), settings.symbols_path(version), size,
-                                       settings.names_for(version), settings.sizes_for(version))
+                                       settings.names_for(version), settings.sizes_for(version), statics)
     return layout, sections, counts
 
 
-def write_symbols(settings: Settings, version: str) -> dict[str, Any]:
-    layout, sections, counts = build(settings, version)
+def write_symbols(settings: Settings, version: str, statics: dict[int, str] | None = None) -> dict[str, Any]:
+    layout, sections, counts = build(settings, version, statics)
     rom = settings.rom(version).read_bytes()
     flat = flat_image(layout, len(rom))
     path = settings.out(version) / "symbols.toml"
@@ -85,7 +87,8 @@ def _array(values: list[str]) -> str:
     return "[" + ", ".join(json.dumps(v) for v in values) + "]"
 
 
-def config_toml(settings: Settings, version: str, entry: int | None, ignored: list[str], overlays: list[str]) -> str:
+def config_toml(settings: Settings, version: str, entry: int | None, ignored: list[str], overlays: list[str],
+                statics: dict[int, str] | None = None) -> str:
     out = settings.out(version)
     lines = ["[input]"]
     if entry is not None:
@@ -106,7 +109,7 @@ def config_toml(settings: Settings, version: str, entry: int | None, ignored: li
     lines += ["", "[patches]", f"stubs = {_array(list(settings.stubs))}", f"ignored = {_array(ignored)}", ""]
     facts = settings.local_indirect_jumps.get(version, [])
     if facts:
-        _, sections, _ = build(settings, version)
+        _, sections, _ = build(settings, version, statics)
         lines += indirect_hooks(facts, [f for s in sections for f in s.functions], settings.rom(version).read_bytes())
     return "\n".join(lines)
 
@@ -119,10 +122,10 @@ def _run(command: list[str], cwd: Path) -> tuple[int, str, int]:
 
 
 def _locate_crash(settings: Settings, version: str, entry: int | None, ignored: list[str], overlays: list[str],
-                  alias: dict[str, str]) -> str:
+                  alias: dict[str, str], statics: dict[int, str]) -> str:
     """Name the function that kills N64Recomp: ignore all others in halves until one is left."""
     out = settings.out(version)
-    _, sections, _ = build(settings, version)
+    _, sections, _ = build(settings, version, statics)
     names = [f.name for s in sections for f in s.functions if f.name not in ignored]
     probe = out / "probe.toml"
 
@@ -130,7 +133,7 @@ def _locate_crash(settings: Settings, version: str, entry: int | None, ignored: 
         keep = set(candidates)
         while True:
             skip = [*ignored, *(alias.get(n, n) for n in names if n not in keep)]
-            atomic_bytes(probe, config_toml(settings, version, entry, skip, overlays).encode())
+            atomic_bytes(probe, config_toml(settings, version, entry, skip, overlays, statics).encode())
             code, log, _ = _run([str(settings.n64recomp), str(probe)], out)
             missing = re.search(r"Function (\S+) is set as ignored in the config file but does not exist", log)
             if missing is None or missing.group(1) in alias:
@@ -161,6 +164,92 @@ def _reason(output: str, name: str) -> str:
     return "no reason printed"
 
 
+_FUNC_HEAD = re.compile(r"^RECOMP_FUNC void (\w+)\(")
+_ZERO_DEST = re.compile(r"^\s*0 = ")
+_GOTO = re.compile(r"\bgoto (L_\w+);")
+_LABEL = re.compile(r"^\s*(L_\w+):")
+
+
+def _unsound(funcs: Path) -> list[tuple[str, str]]:
+    """Functions whose generated C cannot compile, found without a compiler.
+
+    N64Recomp accepts data that decodes as code and then emits an assignment to the literal zero register,
+    or a branch to a label that another function owns. Both are refused like any instruction it rejects.
+    """
+    found: list[tuple[str, str]] = []
+    for path in sorted(funcs.glob("*.c")):
+        body: dict[str, list[str]] = {}
+        current: list[str] = []
+        for line in path.read_text().splitlines():
+            head = _FUNC_HEAD.match(line)
+            if head:
+                current = body.setdefault(head.group(1), [])
+            current.append(line)
+        for name, lines in body.items():
+            labels = {m.group(1) for ln in lines if (m := _LABEL.match(ln))}
+            outside = next((m.group(1) for ln in lines for m in _GOTO.finditer(ln) if m.group(1) not in labels), None)
+            if any(_ZERO_DEST.match(ln) for ln in lines):
+                found.append((name, "generated C assigns to the zero register (data decoded as code)"))
+            elif outside:
+                found.append((name, f"generated C branches to {outside}, a label outside the function"))
+    return found
+
+
+_RECOMP_CALL = re.compile(r"\b(\w+_recomp)\(rdram, ctx\)")
+
+
+def _mark_loops(funcs: Path) -> int:
+    """Put a service point on every backward branch so a guest spin-wait can be preempted.
+
+    The host services interrupts and runs a higher-priority thread at function entries only. A wait loop that
+    stays inside one function (`while (flag);`) never reaches one, so the thread that would clear the flag
+    never runs. The marker is a macro the host defines in its trace header.
+    """
+    marked = 0
+    for path in sorted(funcs.glob("*.c")):
+        labels: set[str] = set()
+        lines = []
+        for line in path.read_text().splitlines(keepends=True):
+            if _FUNC_HEAD.match(line):
+                labels = set()
+            if (label := _LABEL.match(line)):
+                labels.add(label.group(1))
+            jump = _GOTO.search(line)
+            if jump and jump.group(1) in labels:
+                line = line.replace(f"goto {jump.group(1)};", f"TRACE_LOOP() goto {jump.group(1)};", 1)
+                marked += 1
+            lines.append(line)
+        atomic_bytes(path, "".join(lines).encode())
+    return marked
+
+
+def _write_decls(funcs: Path, sections: list[Section], replaced: set[str]) -> None:
+    """Declare the runtime calls the generated code makes and list the functions the profile renames to them.
+
+    The runtime defines some `<name>_recomp` it does not declare, and N64Recomp leaves the ones it ignores out
+    of the function table, so guest code that reaches them through a stored pointer (not a `jal`) needs an
+    explicit address-to-function entry. Repeating a compatible declaration is legal C.
+    """
+    called = {m.group(1) for p in funcs.glob("*.c") for m in _RECOMP_CALL.finditer(p.read_text())}
+    names = sorted(called | {f"{n}_recomp" for n in replaced})
+    lines = [f"void {n}(uint8_t* rdram, recomp_context* ctx);" for n in names]
+    guard_open = '#ifdef __cplusplus\nextern "C" {\n#endif\n'
+    guard_close = "#ifdef __cplusplus\n}\n#endif\n"
+    text = "#pragma once\n#include <stdint.h>\n" + guard_open + "\n".join(lines) + "\n" + guard_close
+    atomic_bytes(funcs / "recomp_decls.h", text.encode())
+    functions = [f for s in sections for f in s.functions if f.name in replaced]
+    entries = [f"    {{ 0x{f.vram:08X}u, {f.name}_recomp }}," for f in functions]
+    table = "\n".join([*entries, "    { 0u, nullptr }"])
+    header = "// vram -> runtime replacement, from recomp.symbol_names\n"
+    atomic_bytes(funcs / "replaced_funcs.inl", f"{header}{table}\n".encode())
+
+
+def _write_statics(out: Path, sections: list[Section]) -> None:
+    rows = [f for s in sections for f in s.functions if f.source]
+    if rows or (out / "statics.tsv").exists():
+        lines = (f"{f.name}\t0x{f.vram:08X}\t0x{f.size:X}\t{f.source}\n" for f in rows)
+        text = "name\tvram\tsize\tsource\n" + "".join(lines)
+        atomic_bytes(out / "statics.tsv", text.encode())
 def _files(root: Path) -> dict[str, str]:
     return {str(p.relative_to(root)): sha256_file(p) for p in sorted(root.rglob("*")) if p.is_file()}
 
@@ -173,21 +262,40 @@ def generate(settings: Settings, version: str, refused_copy: Path | None = None)
     if overlays:
         atomic_bytes(out / "relocatable_sections.txt", ("\n".join(overlays) + "\n").encode())
     refused: list[tuple[str, str]] = []
+    statics: dict[int, str] = {}  # recompiler-found statics promoted to functions: vram -> its name
     entry: int | None = settings.entrypoint
     entry_name = _function_at(settings, version, entry) if entry is not None else ""
     alias: dict[str, str] = {}
     peak = 0
+    def refuse(name: str, reason: str) -> None:
+        nonlocal symbols
+        static = _STATIC.match(name)
+        if static and int(static.group(1), 16) not in statics:
+            # The ignore list is checked before statics exist, so a refused static cannot be ignored by name.
+            # Declare it as a function (extent from the decomp's boundaries); the next pass ignores it normally.
+            statics[int(static.group(1), 16)] = name
+            symbols = write_symbols(settings, version, statics)
+        refused.append((name, reason))
+        atomic_bytes(out / "refused.tsv", ("name\treason\n" + "".join(f"{n}\t{r}\n" for n, r in refused)).encode())
     log = ""
     while True:
         ignored = [*settings.ignored, *(alias.get(name, name) for name, _ in refused)]
-        atomic_bytes(out / "recomp.toml", config_toml(settings, version, entry, ignored, overlays).encode())
+        atomic_bytes(out / "recomp.toml", config_toml(settings, version, entry, ignored, overlays, statics).encode())
         if (out / "funcs").exists():
             shutil.rmtree(out / "funcs")  # stale output of an earlier attempt; the next run rewrites everything
         (out / "funcs").mkdir(parents=True, exist_ok=True)
         code, log, rss = _run([str(settings.n64recomp), str(out / "recomp.toml")], out)
         peak = max(peak, rss)
         if code == 0:
-            break
+            known = {n for n, _ in refused}
+            unsound = [(n, why) for n, why in _unsound(out / "funcs") if n not in known]
+            if not unsound:
+                break
+            if len(refused) + len(unsound) > settings.max_refusals:
+                raise TasteError("recomp.n64recomp", f"{len(unsound)} more functions emit uncompilable C: {unsound[0]}")
+            for name, why in unsound:
+                refuse(name, why)
+            continue
         missing = re.search(r"Function (\S+) is set as ignored in the config file but does not exist", log)
         if missing and missing.group(1) not in alias:
             # N64Recomp renames its built-in "renamed" functions to <name>_recomp before checking the ignore list.
@@ -195,7 +303,7 @@ def generate(settings: Settings, version: str, refused_copy: Path | None = None)
             continue
         failed = next((m.group(1) for ln in reversed(log.splitlines()) if (m := _FAILED.match(ln.strip()))), None)
         if failed is None and code < 0 and len(refused) < settings.max_refusals:
-            failed = _locate_crash(settings, version, entry, ignored, overlays, alias)
+            failed = _locate_crash(settings, version, entry, ignored, overlays, alias, statics)
             log += f"\nN64Recomp died with signal {-code} while analysing {failed}\nError recompiling {failed}\n"
         if failed is None or len(refused) >= settings.max_refusals:
             raise TasteError("recomp.n64recomp", f"exit {code}: {' | '.join(log.strip().splitlines()[-3:])}")
@@ -205,15 +313,17 @@ def generate(settings: Settings, version: str, refused_copy: Path | None = None)
             # the entrypoint is dropped (the host must supply one) and the function is ignored by its real name.
             entry, failed = None, entry_name
             reason = f"entrypoint function; entrypoint dropped from config: {reason}"
-        refused.append((failed, reason))
-        atomic_bytes(out / "refused.tsv", ("name\treason\n" + "".join(f"{n}\t{r}\n" for n, r in refused)).encode())
+        refuse(failed, reason)
+    _write_statics(out, build(settings, version, statics)[1])
+    loops = _mark_loops(out / "funcs") if settings.trace_mode else 0
+    _write_decls(out / "funcs", build(settings, version, statics)[1], set(settings.names_for(version).values()))
     (out / "probe.toml").unlink(missing_ok=True)  # scratch config of the crash locator
     count = re.search(r"Function count: (\d+)", log)
     tsv = "name\treason\n" + "".join(f"{n}\t{r}\n" for n, r in refused)
     atomic_bytes(out / "refused.tsv", tsv.encode())
     if refused_copy is not None:
         atomic_bytes(refused_copy, tsv.encode())
-    rsp = _rsp(settings, version, layout) if settings.rsp_segment else None
+    rsp = _rsp(settings, version, layout) if settings.rsp_segment or settings.rsp_rom is not None else None
     if rsp:
         peak = max(peak, rsp.pop("peak_rss_kb"))
     manifest = {
@@ -230,6 +340,7 @@ def generate(settings: Settings, version: str, refused_copy: Path | None = None)
         "entrypoint_in_config": entry,
         "function_count_reported": int(count.group(1)) if count else None,
         "refused": len(refused),
+        "loop_service_points": loops,
         "rsp": rsp,
         "files": {k: v for k, v in _files(out).items() if k != "MANIFEST.json"},
     }
@@ -246,13 +357,21 @@ def generate(settings: Settings, version: str, refused_copy: Path | None = None)
 
 
 def _rsp(settings: Settings, version: str, layout: Layout) -> dict[str, Any]:
-    segment = next((s for s in layout.segments if s.name == settings.rsp_segment), None)
-    if segment is None or segment.vram is None:
-        raise TasteError("recomp.rsp", f"segment {settings.rsp_segment} not found")
-    size = layout.extent(segment, settings.rom(version).stat().st_size)
-    execution = settings.rsp_execution_vram
-    if execution is None:
-        execution = segment.options.get("execution_vram", segment.vram)
+    if settings.rsp_rom is not None:
+        # The decomp's layout does not delimit the microcode; the profile gives the sourced ROM span.
+        name, start, size = f"rom_{settings.rsp_rom:X}", settings.rsp_rom, settings.rsp_size or 0
+        if start + size > settings.rom(version).stat().st_size:
+            raise TasteError("recomp.rsp", "microcode span extends past the ROM")
+        execution = settings.rsp_execution_vram
+    else:
+        segment = next((s for s in layout.segments if s.name == settings.rsp_segment), None)
+        if segment is None or segment.vram is None:
+            raise TasteError("recomp.rsp", f"segment {settings.rsp_segment} not found")
+        name, start = segment.name, segment.start
+        size = layout.extent(segment, settings.rom(version).stat().st_size)
+        execution = settings.rsp_execution_vram
+        if execution is None:
+            execution = segment.options.get("execution_vram", segment.vram)
     if execution & ~0xFFF not in (0x1000, 0x04001000) or execution & 3:
         raise TasteError("recomp.rsp", "RSP execution address must be in IMEM; ROM/storage VRAM is not executable")
     out = settings.out(version)
@@ -260,7 +379,7 @@ def _rsp(settings: Settings, version: str, layout: Layout) -> dict[str, Any]:
     target.parent.mkdir(parents=True, exist_ok=True)
     config = "\n".join(
         [
-            f"text_offset = 0x{segment.start:X}",
+            f"text_offset = 0x{start:X}",
             f"text_size = 0x{size:X}",
             f"text_address = 0x{execution:X}",
             f"rom_file_path = {json.dumps(str(settings.rom(version)))}",
@@ -275,7 +394,7 @@ def _rsp(settings: Settings, version: str, layout: Layout) -> dict[str, Any]:
     if code != 0 or not target.is_file():
         raise TasteError("recomp.rsprecomp", f"exit {code}: {' | '.join(log.strip().splitlines()[-3:])}")
     return {
-        "segment": segment.name,
+        "segment": name,
         "output": str(target.relative_to(out)),
         "sha256": sha256_file(target),
         "peak_rss_kb": rss,
