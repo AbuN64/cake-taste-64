@@ -60,6 +60,8 @@ def narrated_probe(profile: Any, story: dict[str, Any], execute: Callable[[], di
     outcome = (
         f"{checked} checks, {differences} differences"
         if checked is not None
+        else f"{probe['cases']} cases: " + ", ".join(f"{n} {k}" for k, n in sorted(probe["statuses"].items()))
+        if probe.get("kind") == "cases"
         else "probe returned; inspect the frozen outputs"
     )
     if probe.get("stubs_hit"):

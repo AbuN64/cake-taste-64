@@ -58,3 +58,19 @@ Core tests use mocked processes and small temporary profiles. Those tests do not
 The core uses a profile byte digest for durable identity, isolates process imports and runtime namespaces, and keeps project facts out of generic code. Completion signals replace polling; timeouts and schema failures are explicit. Stages report measured command duration. There is one CLI and no retired compatibility route. Domain-specific output behavior and resource limits remain the domain owner's proof obligation.
 
 Asset ledger dashboards: `taste catalog render` validates a project ledger and publishes a searchable metadata snapshot. See [catalog contract](../src/cake_taste/catalog/README.md).
+
+## Behaviour probe
+
+`taste repro probe --kind cases --function F --input request.json` calls one function of a bounded closure on many
+input cases from one RDRAM image and records, per case, an ordered event stream: every call and stub hit with its
+argument registers, every store (address, width, value), the words read (those outside the seeded ranges flagged), the
+net change to memory, the returned registers and the callee-saved registers left changed. The case ends `ok`, `unmapped`,
+`mmio` (hardware space), `timeout` or `fatal` (indirect call outside the closure, syscall, break, a NaN check).
+
+The request names `version`, `function`, `cases` (each `{name, registers, stack, memory}`; the memory items are
+`{addr, hex|u8|s16|u32|f32...}` as in the call probe), `depth` (calls deep the original callees run; deeper ones are
+stubs that log their arguments), `memory_end` (RDRAM extended for regions past the console's), `timeout_seconds` per case
+and optionally `candidate`: `{image, vram, functions: [{name, offset, size}], entry}`, a flat image already linked at
+`vram` (code, then data) whose functions replace the named one. N64Recomp recompiles the image as one extra section of the
+original symbols with every original function ignored, so calls still resolve to the original code. Results are frozen
+in `probe/cases.json`; an original-only request is cached by ROM digest, symbols, closure and cases.

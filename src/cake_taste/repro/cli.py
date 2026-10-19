@@ -10,6 +10,7 @@ from typing import Any
 from cake_taste import TasteError
 
 from .bounded import bounded_probe
+from .cases import cases_probe
 from .narration import MATCH_STATES, narrated_probe, probe_story
 from .probe import KINDS, probe
 from .runner import run_command
@@ -30,7 +31,8 @@ def run(profile: Any, argv: tuple[str, ...]) -> dict[str, Any]:
     scene = commands.add_parser("scenario")
     scene.add_argument("name")
     shot = commands.add_parser("probe")
-    shot.add_argument("--kind", required=True, choices=(*KINDS, "call"), help="call = bounded closure probe")
+    shot.add_argument("--kind", required=True, choices=(*KINDS, "call", "cases"),
+                      help="call = bounded closure probe; cases = many cases with an event record")
     shot.add_argument("--function", help="name or address; a call request may name it instead")
     shot.add_argument("--range", dest="span")
     shot.add_argument("--frames", type=int)
@@ -56,6 +58,13 @@ def run(profile: Any, argv: tuple[str, ...]) -> dict[str, Any]:
         if args.kind == "call":
             return narrated_probe(profile, story, lambda: bounded_probe(
                 profile, function=args.function, script=args.input))
+        if args.kind == "cases":
+
+            def run_cases() -> dict[str, Any]:
+                return cases_probe(profile, function=args.function, script=args.input)
+
+            # a request that is one of many (learning rounds) says so and stays off the narration feed
+            return narrated_probe(profile, story, run_cases) if story.get("narrate", True) else run_cases()
         if not args.function:
             raise TasteError("repro.function", f"probe {args.kind} needs --function")
         return narrated_probe(profile, story, lambda: probe(

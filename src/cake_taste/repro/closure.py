@@ -113,10 +113,21 @@ def _hex(value: int) -> str:
     return f"0x{value & 0xFFFFFFFF:08X}u"
 
 
-def render_unit(found: Closure, vrams: dict[str, int], include: str, trace_mode: bool, stub_v0: dict[str, int]) -> str:
-    """One C unit: includes, prototypes, stubs, selected bodies and a vram table for get_function."""
+def render_unit(
+    found: Closure,
+    vrams: dict[str, int],
+    include: str,
+    trace_mode: bool,
+    stub_v0: dict[str, int],
+    headers: tuple[str, ...] | None = None,
+) -> str:
+    """One C unit: includes, prototypes, stubs, selected bodies and a vram table for get_function.
+
+    `headers` replaces the bounded probe's own two includes (bounded.h, trace.h) for a probe with its own hooks."""
     names = sorted(found.bodies) + sorted(found.stubs)
-    lines = [include, '#include "bounded.h"', '#include "trace.h"' if trace_mode else "", ""]
+    own = [f'#include "{name}"' for name in headers] if headers is not None else [
+        '#include "bounded.h"', '#include "trace.h"' if trace_mode else ""]
+    lines = [include, *own, ""]
     lines += [f"void {name}(uint8_t* rdram, recomp_context* ctx);" for name in names]
     lines.append("")
     for name in sorted(found.stubs):
@@ -132,3 +143,27 @@ def render_unit(found: Closure, vrams: dict[str, int], include: str, trace_mode:
     lines.append("    {0, 0, 0}")
     lines.append("};")
     return "\n".join(lines) + "\n"
+
+
+def limit_depth(root: str, bodies: dict[str, str], depth: int, *, same_unit: str = "") -> set[str]:
+    """Callees deeper than `depth` calls from the root: stub them. A name starting with `same_unit` is part of the
+    root's own unit (its sibling functions) and costs no depth."""
+    reached = {root: 0}
+    queue = [root]
+    deep: set[str] = set()
+    while queue:
+        name = queue.pop(0)
+        body = bodies.get(name)
+        if body is None:
+            continue
+        for callee in _CALL.findall(body[body.index("{"):]):
+            step = 0 if same_unit and callee.startswith(same_unit) and name.startswith(same_unit) else 1
+            level = reached[name] + step
+            if level > depth:
+                if callee in bodies:
+                    deep.add(callee)
+                continue
+            if callee not in reached or level < reached[callee]:
+                reached[callee] = level
+                queue.append(callee)
+    return deep - {name for name, level in reached.items() if level <= depth}
