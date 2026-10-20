@@ -79,13 +79,33 @@ in `probe/cases.json`; an original-only request is cached by ROM digest, symbols
 
 `taste repro capture --function F --version V [--hit N]` runs the oracle host under gdb with a breakpoint on the exact
 entry of F's recompiled body (the Nth entry with `--hit`), dumps guest RDRAM and the entry registers (`rdram` and `ctx`
-are the host's first two argument registers) and freezes both in `work_root/captures/<key>`, the key being ROM sha1,
-function, hit, RDRAM size and host binary. A repeat is served from there. The result carries `capture` (the record) and
-`seed`: one `seed.memory` item `{addr, file, sha256}` (a `file` item is the frozen image, pinned by its hash), the entry
-`sp` and the entry registers as one case, ready to splice into a `--kind cases` request. A function the oracle does not
-reach within `timeout_seconds` is refused with the stack where each thread stopped. Profile section `repro.capture`:
-`facts`, `host` (the built oracle executable), `work_root`, `env` (display, library and config variables of the host),
-optional `gdb`, `timeout_seconds` (default 120).
+are the host's first two argument registers) and freezes both in `work_root/captures/<key>`. The key is everything that
+changes a capture: ROM sha1, function, hit, RDRAM size, the host binary and the inputs it was built from, the gdb
+script, the run environment and the recorded stubs. A repeat is served from there only when `capture.json` (written
+last) exists and the image and calls it names still hash as recorded; anything less is redone. The result carries
+`capture` (the record) and `seed`: one `seed.memory` item `{addr, file, sha256}` (a `file` item is the frozen image,
+pinned by its hash), the entry `sp` and the entry registers as one case, ready to splice into a `--kind cases` request.
+Repeat `--function` to capture several, `--jobs` oracle runs at a time; each row ends `captured` or with its finding key.
+
+Findings, each named: `repro.capture.unreached` (the run did not reach the entry within `timeout_seconds`; the stack
+where each thread stopped is given, and the miss is kept so a sweep does not rerun it until the timeout grows; reaching
+it needs scripted input in `env` or a longer run), `repro.capture.oracle_exit` (the oracle ended early: a display it
+could not open, a crash; never cached), `repro.capture.stale_host` / `repro.capture.host_build` (below),
+`repro.capture.display` (the display named by `env` is not running and cannot be started).
+
+The host binary is trusted only when it is known to be built from the current inputs: the recompiled output's
+`MANIFEST.json` (it hashes every generated file), the `facts` file and every path in `host_inputs` (host sources, pins;
+a directory is hashed file by file). A stamp in `work_root/hosts/` records the inputs of the last build; when it is
+missing or differs, `host_build.command` runs (one build at a time; an incremental build is cheap when nothing changed)
+and the stamp is written after it succeeds with unchanged inputs. Without `host_build` the capture fails fast with
+`repro.capture.stale_host`; the binary's age is never evidence.
+
+Captures do not take the one-at-a-time repro lock the probes use: each takes one of `jobs` slot locks beside it, so at
+most `jobs` oracle runs go at once over every process. Profile section `repro.capture`: `facts`, `host` (the built
+oracle executable), `work_root`, `env` (display, library and config variables of the host), optional `gdb`,
+`timeout_seconds` (default 120), `trace_seconds` (default 30), `jobs` (default 2), `host_inputs`, `host_build`
+(`{command, timeout_seconds}`), `display_command` (starts the Wayland display `env` names when its socket is missing,
+so captures never open windows on a display they were not given). Unknown keys are refused.
 
 `--stubs a,b,c` also records, in call order, each named callee's arguments, its v0/v1 on return and the RDRAM words it wrote
 (a diff around the call, kept when at most 64 words), counting only calls not made inside another recorded callee. The

@@ -10,6 +10,8 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -69,6 +71,32 @@ def _freeze_artifact(source: Path, destination: Path) -> dict[str, Any]:
         Path(temporary).unlink(missing_ok=True)
 
 
+@contextmanager
+def _held(lock_path: Path, slots: int) -> Iterator[None]:
+    """The repro lock (one isolated repro at a time), or with `slots` one of that many slot locks beside it: a kind of
+    run that may go in parallel (an oracle capture) takes a free slot and never waits behind the probes."""
+    if slots < 1:
+        with lock_path.open("a+b") as lock:
+            # one isolated repro at a time: a later caller sleeps in the kernel until the holder ends
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            yield
+        return
+    while True:
+        for index in range(slots):
+            lock = lock_path.with_name(f"{lock_path.name}.slot{index}").open("a+b")
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                lock.close()
+                continue
+            try:
+                yield
+            finally:
+                lock.close()
+            return
+        time.sleep(0.25)
+
+
 def run_command(
     profile: Any,
     *,
@@ -79,6 +107,7 @@ def run_command(
     artifacts: list[Path] | None = None,
     expected_exit_code: int = 0,
     env: dict[str, str] | None = None,
+    slots: int = 0,
 ) -> dict[str, Any]:
     if not 0 <= expected_exit_code <= 255:
         raise ValueError("expected_exit_code must be 0..255")
@@ -90,14 +119,17 @@ def run_command(
     lock_path = _path(profile, "lock_path")
     root.mkdir(parents=True, exist_ok=True)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("a+b") as lock:
-        waiting = time.monotonic()
-        # one isolated repro at a time: a later caller sleeps in the kernel until the holder ends
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    waiting = time.monotonic()
+    with _held(lock_path, slots):
         waited = round(time.monotonic() - waiting, 3)
         run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
         run_dir = root / run_id
-        run_dir.mkdir()
+        for twin in range(1, 1000):  # parallel slot runs may start in the same microsecond
+            try:
+                run_dir.mkdir()
+                break
+            except FileExistsError:
+                run_dir = root / f"{run_id}-{twin}"
         workdir = cwd.resolve() if cwd else run_dir
         if not workdir.is_dir():
             raise ValueError("repro cwd is not a directory")

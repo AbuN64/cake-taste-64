@@ -33,17 +33,21 @@ class CaptureTests(unittest.TestCase):
         gen = root / "gen" / "v1"
         gen.mkdir(parents=True)
         (gen / "symbols.toml").write_text(SYMBOLS)
+        (gen / "MANIFEST.json").write_text('{"files": {"funcs/funcs_0.c": "aa"}}')
         (root / "rom.z64").write_bytes(b"rom")
         (root / "host").write_bytes(b"host")
         (root / "facts.json").write_text(json.dumps({"version": "v1", "boot": {"rdram_size": RDRAM}}))
         self.settings = type("S", (), {"out": lambda s, v: gen, "rom": lambda s, v: root / "rom.z64"})()
+        self.config = {"facts": "facts.json", "host": "host", "work_root": "work",
+                       "env": {"WAYLAND_DISPLAY": "wayland-1"},
+                       "host_build": {"command": ["sh", "-c", f"echo built >> {root}/builds"]}}
         self.profile = type("P", (), {
-            "section": lambda s, name: {"capture": {"facts": "facts.json", "host": "host", "work_root": "work",
-                                                    "env": {"WAYLAND_DISPLAY": "wayland-1"}}},
+            "section": lambda s, name: {"capture": self.config},
             "resolve_path": lambda s, value: root / value,
         })()
         self.runs = []
         self.reached = True
+        self.exit_code = 124  # what `timeout` exits with when it stopped a run that never reached the entry
 
     def fake_run(self, profile, *, name, function, command, artifacts=(), env=None, **_):
         self.runs.append((command, env))
@@ -66,7 +70,12 @@ class CaptureTests(unittest.TestCase):
             text = "CAPTURE-MISS\nThread 1\n#0  poll () from libc\n#1  main ()\n"
         (run_dir / "output.log").write_text(text)
         return {"receipt": str(run_dir / "receipt.json"),
-                "status": {"phase": "passed", "run_dir": str(run_dir), "log_path": str(run_dir / "output.log")}}
+                "status": {"phase": "passed", "run_dir": str(run_dir), "log_path": str(run_dir / "output.log"),
+                           "exit_code": 0 if self.reached else self.exit_code}}
+
+    def builds(self):
+        path = self.root / "builds"
+        return len(path.read_text().splitlines()) if path.is_file() else 0
 
     def grab(self, **kw):
         with patch.object(capture, "load_recomp", return_value=self.settings), \
@@ -140,6 +149,137 @@ class CaptureTests(unittest.TestCase):
             self.grab()
         self.assertIn("was not reached", raised.exception.detail)
         self.assertIn("poll () from libc", raised.exception.detail)
+
+    def test_a_never_reached_entry_is_named_and_kept_until_a_longer_timeout(self):
+        self.reached = False
+        for _ in range(2):
+            with self.assertRaises(TasteError) as raised:
+                self.grab()
+            self.assertEqual(raised.exception.key, "repro.capture.unreached")
+        self.assertEqual(len(self.runs), 1)  # the miss is kept: a sweep does not rerun the oracle for it
+        with self.assertRaises(TasteError):
+            self.grab(stubs=("leaf",))
+        self.assertEqual(len(self.runs), 1)  # nor for another stub set: what the run reaches does not depend on it
+        self.assertIn("scripted input", raised.exception.detail)
+        self.config["timeout_seconds"] = 300
+        with self.assertRaises(TasteError):
+            self.grab()
+        self.assertEqual(len(self.runs), 2)  # a longer run tries again
+
+    def test_an_oracle_that_ends_early_is_its_own_finding_and_never_cached(self):
+        self.reached, self.exit_code = False, 1
+        for _ in range(2):
+            with self.assertRaises(TasteError) as raised:
+                self.grab()
+            self.assertEqual(raised.exception.key, "repro.capture.oracle_exit")
+        self.assertEqual(len(self.runs), 2)
+
+    def test_a_host_with_no_recorded_build_is_built_once_and_a_changed_input_rebuilds_it(self):
+        self.grab()
+        self.assertEqual(self.builds(), 1)
+        self.grab()
+        self.assertEqual((self.builds(), len(self.runs)), (1, 1))
+        (self.root / "gen" / "v1" / "MANIFEST.json").write_text('{"files": {"funcs/funcs_0.c": "bb"}}')
+        got = self.grab()
+        self.assertEqual((self.builds(), len(self.runs)), (2, 2))  # new inputs: a new build and a new capture key
+        self.assertTrue(got["capture"]["host_built"])
+
+    def test_a_stale_host_without_a_build_command_fails_fast(self):
+        del self.config["host_build"]
+        with self.assertRaises(TasteError) as raised:
+            self.grab()
+        self.assertEqual(raised.exception.key, "repro.capture.stale_host")
+        self.assertIn("no build of", raised.exception.detail)
+        self.assertEqual(self.runs, [])
+
+    def test_a_host_replaced_after_its_build_is_stale_and_a_failed_build_is_named(self):
+        self.grab()
+        (self.root / "host").write_bytes(b"other host")
+        self.config["host_build"] = {"command": ["false"]}
+        with self.assertRaises(TasteError) as raised:
+            self.grab()
+        self.assertEqual(raised.exception.key, "repro.capture.host_build")
+        self.assertIn("was replaced", raised.exception.detail)
+
+    def test_host_inputs_cover_extra_paths_and_a_directory_by_content(self):
+        sources = self.root / "hostsrc"
+        sources.mkdir()
+        (sources / "main.cpp").write_text("int main(){}")
+        self.config["host_inputs"] = ["hostsrc"]
+        self.grab()
+        (sources / "main.cpp").write_text("int main(){return 1;}")
+        self.grab()
+        self.assertEqual(self.builds(), 2)
+
+    def test_a_cache_entry_whose_image_changed_or_is_missing_is_redone(self):
+        first = self.grab()["capture"]
+        Path(first["rdram_path"]).write_bytes(b"torn")
+        again = self.grab()["capture"]
+        self.assertEqual((again["cached"], len(self.runs)), (False, 2))
+        Path(again["rdram_path"]).unlink()
+        self.assertEqual(self.grab()["capture"]["cached"], False)
+        self.assertEqual(len(self.runs), 3)
+
+    def test_unknown_profile_keys_are_refused(self):
+        self.config["timeout"] = 5
+        with self.assertRaises(TasteError) as raised:
+            self.grab()
+        self.assertEqual(raised.exception.key, "config.schema")
+
+    def test_a_display_that_is_not_running_and_cannot_be_started_is_named(self):
+        self.config["env"] = {"WAYLAND_DISPLAY": "wayland-9", "XDG_RUNTIME_DIR": str(self.root / "rt")}
+        with self.assertRaises(TasteError) as raised:
+            self.grab()
+        self.assertEqual(raised.exception.key, "repro.capture.display")
+        self.assertEqual(self.runs, [])
+
+    def test_a_display_command_brings_up_the_socket_before_the_oracle_runs(self):
+        runtime = self.root / "rt"
+        self.config["env"] = {"WAYLAND_DISPLAY": "wayland-9", "XDG_RUNTIME_DIR": str(runtime)}
+        self.config["display_command"] = ["sh", "-c", 'touch "$XDG_RUNTIME_DIR/wayland-9"']
+        self.grab()
+        self.assertTrue((runtime / "wayland-9").exists())
+        self.assertEqual(len(self.runs), 1)
+
+    def test_several_functions_are_captured_in_parallel_each_with_its_status(self):
+        root = '{ name = "root", vram = 0x80001000, size = 0x10 },'
+        leaf = '{ name = "leaf", vram = 0x80002000, size = 0x10 },'
+        (self.root / "gen" / "v1" / "symbols.toml").write_text(SYMBOLS.replace(root, root + "\n    " + leaf))
+        with patch.object(capture, "load_recomp", return_value=self.settings), \
+             patch.object(capture, "run_command", side_effect=self.fake_run):
+            got = capture.capture_many(self.profile, functions=["root", "leaf", "0x80009999"], version="v1", jobs=2)
+        statuses = {row["function"]: row["status"] for row in got["captures"]}
+        self.assertEqual(statuses, {"root": "captured", "leaf": "captured", "0x80009999": "repro.function"})
+        self.assertEqual((got["jobs"], got["counts"]["captured"]), (2, 2))
+
+    def test_captures_take_slot_locks_beside_the_repro_lock_and_never_wait_behind_it(self):
+        import fcntl
+        import threading
+
+        from cake_taste.repro import runner
+
+        lock = self.root / "repro.lock"
+        held = lock.open("a+b")
+        fcntl.flock(held, fcntl.LOCK_EX)  # a probe holds the one-at-a-time lock
+        inside, release = threading.Barrier(3), threading.Event()
+
+        def take():
+            with runner._held(lock, 2):
+                inside.wait(timeout=5)  # both slots are held at once
+                release.wait(timeout=5)
+
+        workers = [threading.Thread(target=take) for _ in range(2)]
+        for worker in workers:
+            worker.start()
+        inside.wait(timeout=5)
+        third = lock.with_name("repro.lock.slot0").open("a+b")
+        with self.assertRaises(BlockingIOError):  # a third capture waits for a slot
+            fcntl.flock(third, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        release.set()
+        for worker in workers:
+            worker.join(timeout=5)
+        third.close()
+        held.close()
 
     def test_a_profile_without_capture_is_a_named_refusal(self):
         profile = type("P", (), {"section": lambda s, name: {}, "resolve_path": lambda s, v: Path(v)})()
