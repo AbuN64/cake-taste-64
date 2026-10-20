@@ -22,6 +22,47 @@ uint8_t *behave_ptr(uint8_t *rdram, uint64_t va, int width);
 }
 #endif
 
+// The unaligned load/store helpers (lwl/lwr/swl/swr and the doubleword forms) translate their aligned block through
+// the host map directly, so a wild pointer ended the whole harness (exit 4) instead of the case, and their reads
+// and stores were never recorded. Here each helper takes its aligned block from behave_ptr, like every other
+// access: an unmapped block stops the case (or reads zero when lenient), mmio stops it, and the access is an event.
+#undef do_lwl
+#undef do_lwr
+#undef do_ldl
+#undef do_ldr
+#undef do_swl
+#undef do_swr
+#undef do_sdl
+#undef do_sdr
+#define BEHAVE_UNALIGNED_LOAD(op, mask) \
+    static inline gpr behave_##op(uint8_t *rdram, gpr initial, gpr offset, gpr reg) { \
+        uint32_t address = (uint32_t)(offset + reg); \
+        uint8_t *block = behave_ptr(rdram, (uint64_t)(address & ~(uint32_t)(mask)), 4); \
+        return do_##op(block, initial, 0, (gpr)(int32_t)(0x80000000u | (address & (mask)))); \
+    }
+#define BEHAVE_UNALIGNED_STORE(op, mask) \
+    static inline void behave_##op(uint8_t *rdram, gpr offset, gpr reg, gpr value) { \
+        uint32_t address = (uint32_t)(offset + reg); \
+        uint8_t *block = behave_ptr(rdram, (uint64_t)(address & ~(uint32_t)(mask)), 4); \
+        do_##op(block, 0, (gpr)(int32_t)(0x80000000u | (address & (mask))), value); \
+    }
+BEHAVE_UNALIGNED_LOAD(lwl, 3u)
+BEHAVE_UNALIGNED_LOAD(lwr, 3u)
+BEHAVE_UNALIGNED_LOAD(ldl, 7u)
+BEHAVE_UNALIGNED_LOAD(ldr, 7u)
+BEHAVE_UNALIGNED_STORE(swl, 3u)
+BEHAVE_UNALIGNED_STORE(swr, 3u)
+BEHAVE_UNALIGNED_STORE(sdl, 7u)
+BEHAVE_UNALIGNED_STORE(sdr, 7u)
+#define do_lwl behave_lwl
+#define do_lwr behave_lwr
+#define do_ldl behave_ldl
+#define do_ldr behave_ldr
+#define do_swl behave_swl
+#define do_swr behave_swr
+#define do_sdl behave_sdl
+#define do_sdr behave_sdr
+
 #define TRACE_ENTRY() behave_enter(__func__, rdram, ctx);
 #define TRACE_RETURN()
 #define probe_stub(name) behave_stub(name, rdram, ctx)
