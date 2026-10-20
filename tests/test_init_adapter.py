@@ -9,8 +9,15 @@ class InitAdapterTests(unittest.TestCase):
         host = Path(__file__).resolve().parents[1] / "hosts/n64recomp"
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            (root / "recomp.h").write_text("#include <stdint.h>\ntypedef struct {int marker;} recomp_context;\n#define MEM_W(o,r) (*(uint32_t*)(rdram+(((r)+(o))-0xffffffff80000000ull)))\n")
-            (root / "boot_profile.h").write_text("#define HOST_OS_CLOCK_RATE 0x80000008u\n#define HOST_COUNT_HZ 46875000u\n")
+            (root / "recomp.h").write_text(
+                "#include <stdint.h>\n"
+                "typedef struct {int marker;} recomp_context;\n"
+                "#define MEM_W(o,r) (*(uint32_t*)(rdram+(((r)+(o))-0xffffffff80000000ull)))\n"
+            )
+            (root / "boot_profile.h").write_text(
+                "#define HOST_OS_CLOCK_RATE 0x80000008u\n"
+                "#define HOST_COUNT_HZ 46875000u\n"
+            )
             (root / "mock.c").write_text(r"""
 #include <assert.h>
 #include "recomp.h"
