@@ -137,9 +137,13 @@ def recompile(
     )[:20]
     out = work / f"candidate-{key}"
     funcs = out / "funcs"
-    cached = sorted(funcs.glob("*.c")) if funcs.is_dir() else []
-    if not cached:
+    # N64Recomp leaves a refused function's file half written, so generated C counts as cached only once a run
+    # succeeded (its `complete` mark is written last); anything else in the entry is a failed run and is redone
+    complete = out / "complete"
+    if not complete.is_file():
         out.mkdir(parents=True, exist_ok=True)
+        for stale in funcs.glob("*.c") if funcs.is_dir() else ():
+            stale.unlink()
         offset = (len(flat) + 15) & ~15
         rom = flat + bytes(offset - len(flat)) + candidate.image
         targets: list[int] = []  # jal targets outside every section, found by the refusals below
@@ -189,12 +193,15 @@ def recompile(
             break
         atomic_bytes(out / "n64recomp.log", log.encode())
         if done.returncode != 0:
+            for partial in funcs.glob("*.c"):
+                partial.unlink()
             failed = _FAILED.findall(log)
             lines = [ln for ln in log.splitlines() if ln.strip() and not ln.startswith("[Info]")]
             reason = " | ".join(lines[-3:]) or f"exit {done.returncode}"
             raise TasteError(
                 "repro.candidate", f"N64Recomp refused the candidate ({', '.join(failed) or 'no name'}): {reason}"
             )
+        atomic_bytes(complete, sha256_bytes(log.encode()).encode())
     from cake_taste.repro.closure import index_bodies
 
     bodies = {n: b for n, b in index_bodies(funcs).items() if n.startswith(PREFIX)}

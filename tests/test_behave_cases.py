@@ -203,6 +203,39 @@ class CandidateTests(unittest.TestCase):
             )
             self.assertEqual((root / "calls").read_text().split(), ["run"])
 
+    def test_a_refused_run_is_never_reused_as_cached_c(self):
+        # N64Recomp refuses a function and leaves its file half written (no closing ';}'): the next call must run
+        # N64Recomp again, not index the leftover
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gen = root / "gen" / "v1"
+            gen.mkdir(parents=True)
+            (gen / "symbols.toml").write_text(SYMBOLS)
+            (gen / "rom.flat").write_bytes(bytes(100))
+            tool = root / "N64Recomp"
+            half = HEAD.format("behave_f") + "    // cut\n"
+            tool.write_text(
+                '#!/bin/sh\nout=$(grep -o \'output_func_path = "[^"]*\' "$1" | cut -d\'"\' -f2)\n'
+                f"echo run >> {root}/calls\n"
+                f"if [ -f {root}/fixed ]; then printf '%s' '{body('behave_f')}' > \"$out/funcs_0.c\"; exit 0; fi\n"
+                f"printf '%s' '{half}' > \"$out/funcs_0.c\"\necho 'Error recompiling behave_f'\nexit 1\n"
+            )
+            tool.chmod(tool.stat().st_mode | stat.S_IXUSR)
+            settings = type("S", (), {"out": lambda self, v: gen, "n64recomp": tool, "stubs": ()})()
+            candidate = self.spec_in(root)
+            vrams = function_vrams(gen / "symbols.toml")
+            with self.assertRaises(TasteError) as caught:
+                cand.recompile(settings, "v1", candidate, root / "work", vrams)
+            self.assertIn("N64Recomp refused the candidate (behave_f)", caught.exception.detail)
+            work = next((root / "work").glob("candidate-*"))
+            self.assertEqual(list((work / "funcs").glob("*.c")), [])  # the half-written file is gone
+            # an entry an older run left half written (no `complete` mark) is redone too
+            (work / "funcs" / "funcs_0.c").write_text(half)
+            (root / "fixed").write_text("")
+            self.assertEqual(list(cand.recompile(settings, "v1", candidate, root / "work", vrams)), ["behave_f"])
+            self.assertEqual(list(cand.recompile(settings, "v1", candidate, root / "work", vrams)), ["behave_f"])
+            self.assertEqual((root / "calls").read_text().split(), ["run", "run"])
+
     def spec_in(self, root):
         return self.spec(root)
 
