@@ -14,6 +14,7 @@ from typing import Any
 from cake_taste import TasteError
 from cake_taste.files import atomic_bytes, atomic_json, sha256_file
 
+from .fallthrough import link_fallthroughs
 from .indirect import hooks as indirect_hooks
 from .model import Section, boot_segment, build_sections, flat_image, symbols_toml
 from .settings import Settings
@@ -316,6 +317,7 @@ def generate(settings: Settings, version: str, refused_copy: Path | None = None)
         refuse(failed, reason)
     _write_statics(out, build(settings, version, statics)[1])
     loops = _mark_loops(out / "funcs") if settings.trace_mode else 0
+    fallthroughs = link_fallthroughs(out / "funcs", out / "symbols.toml")
     _write_decls(out / "funcs", build(settings, version, statics)[1], set(settings.names_for(version).values()))
     (out / "probe.toml").unlink(missing_ok=True)  # scratch config of the crash locator
     count = re.search(r"Function count: (\d+)", log)
@@ -341,6 +343,7 @@ def generate(settings: Settings, version: str, refused_copy: Path | None = None)
         "function_count_reported": int(count.group(1)) if count else None,
         "refused": len(refused),
         "loop_service_points": loops,
+        "fallthrough_links": fallthroughs,
         "rsp": rsp,
         "files": {k: v for k, v in _files(out).items() if k != "MANIFEST.json"},
     }
