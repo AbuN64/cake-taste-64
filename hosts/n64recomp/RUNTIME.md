@@ -300,6 +300,24 @@ teardown, which races the running guest threads.
 Recordings are not bit-reproducible after boot: the audio thread is wall-paced
 and threads interleave, so compare structure, not bytes.
 
+## Lockstep recorder
+`lockstep.cpp` is a test instrument for comparing a native port's boot with this
+oracle, off unless `N64R_LOCKSTEP_DIR` is set. The trace probe (`probe/trace.h`)
+hands it each function entry (name, a0-a3, f12, f14, sp) and return (v0, v1, f0).
+- `N64R_LOCKSTEP_DIR`: output directory (created). Receives `lockstep.jsonl`
+  (`meta`, then `hit` at the first entry of each function with the 4 KiB pages
+  whose hash changed since the previous hit, `call`/`ret` for its first calls,
+  `watch`) and `pages.bin` (each distinct page once: u32 page, u32 0, u64 hash,
+  4096 bytes). Pages are hashed and stored in canonical big-endian byte order
+  (each RDRAM word byte-swapped back); the hash is FNV-1a over little-endian
+  64-bit words.
+- `N64R_LOCKSTEP_RAM`: RDRAM bytes hashed (default 0x800000).
+- `N64R_LOCKSTEP_CALLS`: calls recorded per function (default 8).
+- `N64R_LOCKSTEP_WATCH`: an RDRAM address; every change of that word seen at an
+  entry or return is a `watch` line naming the function.
+Returns pair with entries by name and stack pointer; frames left above a return
+(tail calls) are dropped. The port's own tool does the comparison.
+
 ## Generation facts for a new game
 - `recomp.symbol_names[version]` maps a vram to a runtime name. A value is the name, or
   `{"name", "source"}` so the evidence travels with the fact. Every name must have a `<name>_recomp`
