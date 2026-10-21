@@ -276,6 +276,7 @@ def generate(settings: Settings, version: str, refused_copy: Path | None = None)
             # Declare it as a function (extent from the decomp's boundaries); the next pass ignores it normally.
             statics[int(static.group(1), 16)] = name
             symbols = write_symbols(settings, version, statics)
+            name = settings.names_for(version).get(int(static.group(1), 16), name)  # the profile may name a static
         refused.append((name, reason))
         atomic_bytes(out / "refused.tsv", ("name\treason\n" + "".join(f"{n}\t{r}\n" for n, r in refused)).encode())
     log = ""

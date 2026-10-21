@@ -63,8 +63,14 @@ def build_sections(
         if used[name] > 1:
             name = f"{name}_{function.vram:08X}"
         grouped[owner.name].append(Function(name, function.rom, function.vram, extent))
+    # Functions the symbol list types but the ELF has no sized symbol for (asm kept outside a compiled object, such
+    # as a decompressor) are boundaries too; left to N64Recomp they run on into their neighbours. Only the profile
+    # names a static: the decomp's libultra names would make N64Recomp swap in the runtime's version.
+    for vram in read_function_addresses(symbols_file):
+        if vram not in (statics or {}) and _declarable(spans, grouped, vram):
+            _add_static(layout, spans, grouped, symbols_file, vram, (overrides or {}).get(vram, f"asm_{vram:08X}"))
     for vram, name in sorted((statics or {}).items()):
-        _add_static(layout, spans, grouped, symbols_file, vram, name)
+        _add_static(layout, spans, grouped, symbols_file, vram, (overrides or {}).get(vram, name))
     if unused_sizes:
         raise TasteError("recomp.sections", f"function_sizes addresses absent from functions: {sorted(unused_sizes)}")
     sections = [
@@ -77,6 +83,12 @@ def build_sections(
         "renamed_from_symbols": renamed,
         "duplicate_names": sum(1 for v in used.values() if v > 1),
     }
+
+
+def _declarable(spans, grouped, vram) -> bool:
+    """Whether vram starts a function in a code section that has none covering it yet."""
+    owners = [s for s, size in spans if s.vram is not None and s.vram <= vram < s.vram + size and grouped[s.name]]
+    return len(owners) == 1 and not any(f.vram <= vram < f.vram + f.size for f in grouped[owners[0].name])
 
 
 def _add_static(layout, spans, grouped, symbols_file, vram, name) -> None:

@@ -43,7 +43,8 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/require_runtime_patch.cmake)
 n64host_require_runtime_patch("${_rt_src}"
   "${CMAKE_CURRENT_SOURCE_DIR}/patches/n64modernruntime-thread-queue-remove.diff")
 
-# Functions N64Recomp refused or ignored have no body; give them logging stubs so the rest links.
+# Functions N64Recomp refused or ignored have no body; give them logging stubs so the rest links
+# (weak: a runtime that implements the same name, such as osGetCount, wins).
 # N64R_REFUSED is an optional TSV (header line, then name<TAB>reason).
 set(_stub_c "#include \"recomp.h\"\nvoid n64host_unimplemented(const char*);\n")
 set(_stub_h "#pragma once\n")
@@ -54,7 +55,7 @@ if(NOT "${N64R_REFUSED}" STREQUAL "")
     string(REGEX MATCH "^[A-Za-z0-9_]+" n "${l}")
     if(NOT "${n}" STREQUAL "")
       string(APPEND _stub_h "void ${n}(uint8_t* rdram, recomp_context* ctx);\n")
-      string(APPEND _stub_c "void ${n}(uint8_t* rdram, recomp_context* ctx) { n64host_unimplemented(\"${n}\"); }\n")
+      string(APPEND _stub_c "__attribute__((weak)) void ${n}(uint8_t* rdram, recomp_context* ctx) { n64host_unimplemented(\"${n}\"); }\n")
     endif()
   endforeach()
 endif()
