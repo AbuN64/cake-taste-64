@@ -190,9 +190,12 @@ def _display(profile: Any, config: dict[str, Any], env: dict[str, str]) -> None:
     """A Wayland display the oracle can open: the socket named by the run environment, started with
     `display_command` when it is not there (one start over every process). A capture never opens windows on a
     display it was not given."""
-    if "WAYLAND_DISPLAY" not in env or "XDG_RUNTIME_DIR" not in env:
+    if "WAYLAND_DISPLAY" in env and "XDG_RUNTIME_DIR" in env:
+        socket = Path(env["XDG_RUNTIME_DIR"]) / env["WAYLAND_DISPLAY"]
+    elif env.get("DISPLAY", "").startswith(":"):  # an X server (Xvfb) by display number
+        socket = Path("/tmp/.X11-unix") / f"X{env['DISPLAY'][1:].split('.')[0]}"
+    else:
         return
-    socket = Path(env["XDG_RUNTIME_DIR"]) / env["WAYLAND_DISPLAY"]
     if socket.exists():
         return
     command = config.get("display_command")
@@ -204,11 +207,12 @@ def _display(profile: Any, config: dict[str, Any], env: dict[str, str]) -> None:
     with (root / "display.lock").open("a+b") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if not socket.exists():
-            Path(env["XDG_RUNTIME_DIR"]).mkdir(parents=True, exist_ok=True, mode=0o700)
+            if "XDG_RUNTIME_DIR" in env:
+                Path(env["XDG_RUNTIME_DIR"]).mkdir(parents=True, exist_ok=True, mode=0o700)
             with (root / "display.log").open("a") as log:
                 subprocess.Popen([str(c) for c in command], stdout=log, stderr=subprocess.STDOUT,
                                  stdin=subprocess.DEVNULL, start_new_session=True,
-                                 env={**os.environ, "XDG_RUNTIME_DIR": env["XDG_RUNTIME_DIR"]})
+                                 env={**os.environ, **{k: env[k] for k in ("XDG_RUNTIME_DIR", "DISPLAY") if k in env}})
             deadline = time.monotonic() + 15
             while not socket.exists() and time.monotonic() < deadline:
                 time.sleep(0.2)

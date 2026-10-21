@@ -25,6 +25,17 @@ cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo && cmake --build build
 
 Point the profile's `recomp.tools` at `build/N64Recomp` and `build/RSPRecomp`.
 
+The host (`hosts/n64recomp`) also builds against N64ModernRuntime and RT64 at their pins, each with its patch, and runs headless on Mesa software Vulkan:
+
+```sh
+sudo apt install cmake ninja-build gcc-14 g++-14 xvfb mesa-vulkan-drivers ffmpeg
+for r in N64ModernRuntime rt64; do git clone https://github.com/$( [ $r = rt64 ] && echo rt64 || echo N64Recomp )/$r && (cd $r && git checkout "$(awk -v r=$r '$1==r{print $2}' ../cake-taste-64/hosts/n64recomp/PINS)" && git submodule update --init --recursive); done
+git -C N64ModernRuntime apply ../cake-taste-64/hosts/n64recomp/patches/n64modernruntime-{thread-queue-remove,gfx-completion}.diff
+git -C rt64 apply ../cake-taste-64/hosts/n64recomp/patches/rt64-acclaim-f3dex2-registration.diff
+```
+
+Configure with the `N64R_*` inputs in `hosts/n64recomp/CMakeLists.txt`, then point `repro.capture` (`host`, `host_build`, `display_command` starting `Xvfb :N`, `env` with `DISPLAY`, `VK_ICD_FILENAMES=.../lvp_icd.json`, `N64R_ROM`) at it.
+
 ## Usage
 
 ```sh
