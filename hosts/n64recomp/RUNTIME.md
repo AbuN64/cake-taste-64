@@ -52,11 +52,29 @@ Checkpoint narration invokes the configured public `taste logs append` command.
 A completed command means delivery/capture succeeded; labels alone do not prove
 a game state. Inspect captured images before accepting front-end or gameplay.
 
+## Virtual guest time
+
+The oracle's clock is virtual (`patches/n64modernruntime-virtual-time.diff`). Count, VI
+retraces, `osSetTimer` timers, SI completion and RSP/graphics task completion are events on one
+virtual clock in nanoseconds. The clock advances only when a guest thread's function-entry
+tick (`cpu_scheduler.cpp`) charges the native thread CPU time it just used, times
+`HOST_NATIVE_CPU_SCALE`; due events run on that guest thread in time order. Wall time and host
+load do not move it, and nothing sleeps to pace the guest.
+
+An RSP task completes a fixed guest duration after submission (graphics 8 ms, audio 2 ms,
+hardware-like constants in `events.cpp`), and only once the host has finished the work: if
+the host renderer is slower, the guest thread waits in wall time at that event while guest
+time stands still. So a slow renderer or a loaded host changes how long a run takes, never the
+guest-visible order or spacing of events. VI is 60 Hz of guest time from retrace 1 at time 0.
+The CPU tick is the only source of guest time: a host-side call that blocks the running guest
+thread with no other guest thread runnable would stall the clock (the original idle thread
+spins in guest code, so this does not occur).
+
 ## Graphics input lifetime
 
 N64ModernRuntime pin `cdf5abbd5026fef5c364c676e4667c45e42b6863` requires
-`patches/n64modernruntime-gfx-completion.diff`: send SP completion only after
-`send_dl` has consumed guest display-list memory. The original game can recycle
+`patches/n64modernruntime-virtual-time.diff`: send SP completion only after
+`send_dl` has consumed guest display-list memory (and see Virtual guest time). The original game can recycle
 that input after SP completion. Before this patch, RT64 eventually parsed boot
 memory indefinitely even though the later RDRAM capture contained a finite,
 valid 6474-command display list. After deferral, graphics continued beyond that
@@ -156,12 +174,11 @@ regions defer this added service until interrupts are restored. Runtime SDK
 message operations retain their existing blocking semantics.
 
 The required profile fact `cpu.native_time_scale` defines a diagnostic ratio of
-guest CPU duration to native thread CPU time. Count/VI/timers continue using the
-runtime clock; pacing keeps guest work from executing arbitrarily far ahead of
-those devices. The host charges thread CPU time, never wall time spent blocked
-or running another guest thread. It accumulates sub-100us debt and pays it in
-100us sleeps with interrupt service between sleeps. Host scheduler and pacing
-work are excluded from the next charge. CPU-clock failure is fatal.
+guest CPU duration to native thread CPU time. Count/VI/timers run on the virtual clock
+that this charge advances (see Virtual guest time); nothing paces the guest in wall time. The
+host charges thread CPU time, never wall time spent blocked or running another guest thread,
+carries the sub-nanosecond remainder, and excludes device events and scheduler work from the
+next charge. CPU-clock failure is fatal.
 
 The scale is an explicit approximation, not an instruction/cycle-accurate model
 or a hardware calibration. Native compiler/CPU and function granularity remain

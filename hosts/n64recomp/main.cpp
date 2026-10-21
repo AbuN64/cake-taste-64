@@ -46,6 +46,7 @@ extern "C" void n64host_memwatch(unsigned, unsigned, int) {}
 
 // ---- callbacks ----------------------------------------------------------
 RspExitReason rsp_audio(uint8_t* rdram, uint32_t ucode_addr);
+void n64host_cpu_idle_return();
 namespace {
 SDL_Window *g_window;
 void *create_gfx() {
@@ -198,6 +199,7 @@ int main(int argc, char **argv) {
     cfg.events_callbacks = ev_cb;
     cfg.error_handling_callbacks = err_cb;
     cfg.threads_callbacks = thr_cb;
+    ultramodern::set_vclock_idle_hook(n64host_cpu_idle_return);
     recomp::start_game(u8"host", "");
     recomp::start(cfg);   // runs the gfx loop until quit
     n64host_golden_finish();

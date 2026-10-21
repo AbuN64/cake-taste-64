@@ -30,7 +30,7 @@ The host (`hosts/n64recomp`) also builds against N64ModernRuntime and RT64 at th
 ```sh
 sudo apt install cmake ninja-build gcc-14 g++-14 xvfb mesa-vulkan-drivers ffmpeg
 for r in N64ModernRuntime rt64; do git clone https://github.com/$( [ $r = rt64 ] && echo rt64 || echo N64Recomp )/$r && (cd $r && git checkout "$(awk -v r=$r '$1==r{print $2}' ../cake-taste-64/hosts/n64recomp/PINS)" && git submodule update --init --recursive); done
-git -C N64ModernRuntime apply ../cake-taste-64/hosts/n64recomp/patches/n64modernruntime-{thread-queue-remove,gfx-completion}.diff
+git -C N64ModernRuntime apply ../cake-taste-64/hosts/n64recomp/patches/n64modernruntime-{thread-queue-remove,virtual-time}.diff
 git -C rt64 apply ../cake-taste-64/hosts/n64recomp/patches/rt64-acclaim-f3dex2-registration.diff
 ```
 

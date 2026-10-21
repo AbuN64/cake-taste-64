@@ -12,12 +12,13 @@ class CpuSchedulerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "ultramodern").mkdir()
-            (root / "cpu_profile.h").write_text("#define HOST_NATIVE_CPU_SCALE 12.0\n")
+            (root / "cpu_profile.h").write_text("#define HOST_NATIVE_CPU_SCALE 2.5\n")
             (root / "recomp.h").write_text(
                 "#pragma once\n#include <cstdint>\nstruct recomp_context { uint64_t r2, r4; };\n"
             )
             (root / "ultramodern/ultramodern.hpp").write_text(
-                "namespace ultramodern { int this_thread(); void check_running_queue(unsigned char*); }\n"
+                "#include <cstdint>\nnamespace ultramodern {\n"
+                "int this_thread(); void check_running_queue(unsigned char*); void vclock_advance(uint64_t);\n}\n"
             )
             harness = root / "test.cpp"
             harness.write_text(r'''
@@ -28,29 +29,35 @@ extern uint8_t* n64host_rdram;
 extern "C" void n64host_cpu_tick();
 extern "C" void __wrap___osDisableInt_recomp(uint8_t*,recomp_context*);
 extern "C" void __wrap___osRestoreInt_recomp(uint8_t*,recomp_context*);
-int64_t cpu=1000; int guest=0, reads=0, drains=0, checks=0, waits=0;
+int64_t cpu=1000; int guest=0, reads=0, drains=0, checks=0; uint64_t clock_ns=0, advances=0;
 int64_t host_thread_cpu_ns(){++reads; return cpu;}
-int64_t host_cpu_wait_ns(int64_t ns){assert(ns==100000); ++waits; cpu+=500; return ns;}
 void dequeue_external_messages(uint8_t*){++drains;}
 namespace ultramodern {
 int this_thread(){return guest;}
 void check_running_queue(uint8_t*){++checks; cpu+=1000;}
+void vclock_advance(uint64_t ns){clock_ns+=ns; ++advances;}
 }
 int main(){
  uint8_t ram[8]{}; recomp_context ctx{};
- n64host_cpu_tick(); assert(reads==0);
- n64host_rdram=ram; n64host_cpu_tick(); assert(reads==0);
- guest=1; n64host_cpu_tick(); assert(checks==1&&drains==1&&waits==0);
- cpu+=5000; n64host_cpu_tick(); assert(waits==0);
- cpu+=5000; n64host_cpu_tick(); assert(waits==1);
- // Blocking/preemption changes wall time, not this thread's CPU clock.
- // Scheduler CPU overhead and our own wait overhead must not create new debt.
+ n64host_cpu_tick(); assert(reads==0&&advances==0);
+ n64host_rdram=ram; n64host_cpu_tick(); assert(reads==0&&advances==0);
+ guest=1; n64host_cpu_tick(); assert(checks==1&&drains==1&&clock_ns==0);
+ // Guest time is native thread CPU time times the scale; nothing else moves it.
+ cpu+=4000; n64host_cpu_tick(); assert(clock_ns==10000);
+ // Scheduler CPU overhead (the check_running_queue above) must not become guest time.
  for(int i=0;i<100;++i)n64host_cpu_tick();
- assert(waits==1);
+ assert(clock_ns==10000);
+ // The sub-nanosecond remainder is carried, not lost: 3 ns * 2.5 twice is exactly 15 ns.
+ cpu+=3; n64host_cpu_tick(); assert(clock_ns==10007);
+ cpu+=3; n64host_cpu_tick(); assert(clock_ns==10015);
+ // Blocking/preemption changes wall time, not this thread's CPU clock: no CPU, no guest time.
+ for(int i=0;i<1000;++i)n64host_cpu_tick();
+ assert(clock_ns==10015);
  __wrap___osDisableInt_recomp(ram,&ctx); assert(ctx.r2==1);
  __wrap___osDisableInt_recomp(ram,&ctx); assert(ctx.r2==0);
  int before=checks;
- cpu+=20000; n64host_cpu_tick(); assert(waits==3&&checks==before);
+ // Guest time still advances (devices keep their schedule) but no interrupt is serviced.
+ cpu+=20000; n64host_cpu_tick(); assert(clock_ns==60015&&checks==before);
  ctx.r4=0; __wrap___osRestoreInt_recomp(ram,&ctx); assert(checks==before);
  ctx.r4=1; __wrap___osRestoreInt_recomp(ram,&ctx); assert(checks==before+1);
  assert(drains==checks);

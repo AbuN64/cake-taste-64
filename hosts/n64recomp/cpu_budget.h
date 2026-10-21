@@ -1,24 +1,22 @@
 #pragma once
-#include <algorithm>
 #include <cstdint>
 
-// CPU-time accounting is independent of wall time spent blocked or preempted.
+// Guest CPU time is native thread CPU time scaled to the original CPU. It is independent of wall
+// time spent blocked or preempted, so guest time never depends on host speed or load.
 // A scale of N models N nanoseconds of guest work per native CPU nanosecond.
 struct HostCpuBudget {
     int64_t last_cpu_ns = -1;
-    double debt_ns = 0;
+    double remainder_ns = 0;
     bool interrupts_enabled = true;
 
-    void charge(int64_t cpu_ns, double scale) {
+    // Returns the whole guest nanoseconds that elapsed since the previous reading.
+    uint64_t charge(int64_t cpu_ns, double scale) {
         if (last_cpu_ns >= 0 && cpu_ns > last_cpu_ns)
-            debt_ns += double(cpu_ns - last_cpu_ns) * (scale - 1.0);
+            remainder_ns += double(cpu_ns - last_cpu_ns) * scale;
         last_cpu_ns = cpu_ns;
-    }
-    int64_t slice(int64_t maximum_ns) const {
-        return std::min(int64_t(debt_ns), maximum_ns);
-    }
-    void spent(int64_t elapsed_ns) {
-        debt_ns = std::max(0.0, debt_ns - double(elapsed_ns));
+        const uint64_t whole = uint64_t(remainder_ns);
+        remainder_ns -= double(whole);
+        return whole;
     }
     uint32_t disable_interrupts() {
         const uint32_t previous = interrupts_enabled;

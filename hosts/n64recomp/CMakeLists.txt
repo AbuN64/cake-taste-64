@@ -42,6 +42,8 @@ endif()
 include(${CMAKE_CURRENT_SOURCE_DIR}/require_runtime_patch.cmake)
 n64host_require_runtime_patch("${_rt_src}"
   "${CMAKE_CURRENT_SOURCE_DIR}/patches/n64modernruntime-thread-queue-remove.diff")
+n64host_require_runtime_patch("${_rt_src}"
+  "${CMAKE_CURRENT_SOURCE_DIR}/patches/n64modernruntime-virtual-time.diff" "virtual time")
 
 # Functions N64Recomp refused or ignored have no body; give them logging stubs so the rest links
 # (weak: a runtime that implements the same name, such as osGetCount, wins).

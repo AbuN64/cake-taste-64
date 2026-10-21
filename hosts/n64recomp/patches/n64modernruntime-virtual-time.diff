@@ -1,0 +1,628 @@
+diff --git a/ultramodern/include/ultramodern/ultramodern.hpp b/ultramodern/include/ultramodern/ultramodern.hpp
+index 46aea61..fdfcf9e 100644
+--- a/ultramodern/include/ultramodern/ultramodern.hpp
++++ b/ultramodern/include/ultramodern/ultramodern.hpp
+@@ -6,6 +6,7 @@
+ #include <stdexcept>
+ #include <span>
+ #include <chrono>
++#include <functional>
+ #include <filesystem>
+ 
+ #undef MOODYCAMEL_DELETE_FUNCTION
+@@ -107,6 +108,20 @@ uint32_t get_speed_multiplier();
+ std::chrono::high_resolution_clock::time_point get_start();
+ std::chrono::high_resolution_clock::duration time_since_start();
+ void measure_input_latency();
++
++// Virtual guest time in nanoseconds. It advances only through vclock_advance, called by the host
++// CPU scheduler with the guest work just executed, so Count, VI, timers and device completions
++// never depend on host speed or load. Events run on the advancing guest thread, in time order.
++uint64_t vclock_now_ns();
++void vclock_advance(uint64_t delta_ns);
++uint64_t vclock_schedule(uint64_t when_ns, std::function<void()> fn);
++void vclock_cancel(uint64_t id);
++// The running guest has nothing to do until a message arrives: guest time moves to the next event
++// (due within max_wait_ns), runs it, and returns whether one ran. Without a due event it moves
++// guest time by max_wait_ns, unless that is UINT64_MAX, which means it waits for an event.
++bool vclock_idle(uint64_t max_wait_ns);
++// Called on the idle thread after vclock_idle, so the host can exclude the event work it just did.
++void set_vclock_idle_hook(std::function<void()> hook);
+ void sleep_milliseconds(uint32_t millis);
+ void sleep_until(const std::chrono::high_resolution_clock::time_point& time_point);
+ 
+diff --git a/ultramodern/src/events.cpp b/ultramodern/src/events.cpp
+index 17d7a47..e28d5e9 100644
+--- a/ultramodern/src/events.cpp
++++ b/ultramodern/src/events.cpp
+@@ -8,6 +8,9 @@
+ #include <mutex>
+ #include <queue>
+ #include <cstring>
++#include <condition_variable>
++#include <memory>
++#include <deque>
+ 
+ #include "blockingconcurrentqueue.h"
+ 
+@@ -24,8 +27,26 @@ void ultramodern::events::set_callbacks(const ultramodern::events::callbacks_t&
+     events_callbacks = callbacks;
+ }
+ 
++// Completion of an RSP task is a device event in guest time: it is delivered a fixed, hardware-like
++// duration after the task started, and only once the host has finished the work, so neither the
++// host renderer's speed nor the host's load changes when the game sees the task end.
++struct TaskDone {
++    std::mutex mutex;
++    std::condition_variable wake;
++    bool done = false;
++    void signal() {
++        { std::lock_guard lock{mutex}; done = true; }
++        wake.notify_all();
++    }
++    void wait();
++};
++
++constexpr uint64_t gfx_task_ns = 8'000'000;
++constexpr uint64_t rsp_task_ns = 2'000'000;
++
+ struct SpTaskAction {
+     OSTask task;
++    std::shared_ptr<TaskDone> done;
+ };
+ 
+ struct ScreenUpdateAction {
+@@ -56,7 +77,6 @@ struct ViState {
+ 
+ static struct {
+     struct {
+-        std::thread thread;
+         int cur_state;
+         int field;
+         ViState states[2];
+@@ -139,6 +159,8 @@ static struct {
+     uint8_t* rdram;
+     moodycamel::BlockingConcurrentQueue<Action> action_queue{};
+     moodycamel::BlockingConcurrentQueue<OSTask*> sp_task_queue{};
++    std::mutex sp_task_done_mutex;
++    std::deque<std::shared_ptr<TaskDone>> sp_task_done; // one per queued RSP task, in order
+     moodycamel::ConcurrentQueue<OSThread*> deleted_threads{};
+ } events_context{};
+ 
+@@ -184,80 +206,65 @@ extern moodycamel::LightweightSemaphore graphics_shutdown_ready;
+ 
+ void set_dummy_vi(bool odd);
+ 
+-void vi_thread_func() {
+-    ultramodern::set_native_thread_name("VI Thread");
+-    // This thread should be prioritized over every other thread in the application, as it's what allows
+-    // the game to generate new audio and gfx lists.
+-    ultramodern::set_native_thread_priority(ultramodern::ThreadPriority::Critical);
+-    using namespace std::chrono_literals;
+-
+-    int remaining_retraces = 1;
++void sp_complete();
++void dp_complete();
+ 
+-    while (!exited) {
+-        // Determine the next VI time (more accurate than adding 16ms each VI interrupt)
+-        auto next = ultramodern::get_start() + (total_vis * 1000000us) / (60 * ultramodern::get_speed_multiplier());
+-        //if (next > std::chrono::high_resolution_clock::now()) {
+-        //    printf("Sleeping for %" PRIu64 " us to get from %" PRIu64 " us to %" PRIu64 " us \n",
+-        //        (next - std::chrono::high_resolution_clock::now()) / 1us,
+-        //        (std::chrono::high_resolution_clock::now() - events_context.start) / 1us,
+-        //        (next - events_context.start) / 1us);
+-        //} else {
+-        //    printf("No need to sleep\n");
+-        //}
+-        // Detect if there's more than a second to wait and wait a fixed amount instead for the next VI if so, as that usually means the system clock went back in time.
+-        if (std::chrono::floor<std::chrono::seconds>(next - std::chrono::high_resolution_clock::now()) > 1s) {
+-            // printf("Skipping the next VI wait\n");
+-            next = std::chrono::high_resolution_clock::now();
+-        }
+-        ultramodern::sleep_until(next);
+-        auto time_now = ultramodern::time_since_start();
+-        // Calculate how many VIs have passed
+-        uint64_t new_total_vis = (time_now * (60 * ultramodern::get_speed_multiplier()) / 1000ms) + 1;
+-        if (new_total_vis > total_vis + 1) {
+-            //printf("Skipped % " PRId64 " frames in VI interupt thread!\n", new_total_vis - total_vis - 1);
+-        }
+-        total_vis = new_total_vis;
++static uint64_t vi_time_ns(uint64_t vi_number) {
++    return vi_number * 1000000000ull / 60;
++}
+ 
+-        // If the game hasn't started yet, set a dummy VI mode and origin.
+-        if (!ultramodern::is_game_started()) {
+-            static bool odd = false;
+-            set_dummy_vi(odd);
+-            odd = !odd;
++static void vi_event() {
++    using namespace std::chrono_literals;
++    static int remaining_retraces = 1;
++    // Retrace n happens at n/60 s of guest time.
++    total_vis += 1;
++    ultramodern::vclock_schedule(vi_time_ns(total_vis), vi_event);
++
++    // If the game hasn't started yet, set a dummy VI mode and origin.
++    if (!ultramodern::is_game_started()) {
++        static bool odd = false;
++        set_dummy_vi(odd);
++        odd = !odd;
++
++        events_context.action_queue.enqueue(DummyWorkloadAction{events_context.vi.get_next_state()->framebuffer});
++    }
+ 
+-            events_context.action_queue.enqueue(DummyWorkloadAction{events_context.vi.get_next_state()->framebuffer});
+-        }
++    // Queue a screen update for the graphics thread with the current VI register state.
++    // Doing this before the VI update is equivalent to updating the screen after the previous frame's scanout finished.
++    events_context.action_queue.enqueue(ScreenUpdateAction{ events_context.vi.regs });
+ 
+-        // Queue a screen update for the graphics thread with the current VI register state.
+-        // Doing this before the VI update is equivalent to updating the screen after the previous frame's scanout finished.
+-        events_context.action_queue.enqueue(ScreenUpdateAction{ events_context.vi.regs });
++    // Update VI registers and swap VI modes.
++    events_context.vi.update_vi();
+ 
+-        // Update VI registers and swap VI modes.
+-        events_context.vi.update_vi();
++    // If the game has started, handle sending VI and AI events.
++    if (ultramodern::is_game_started()) {
++        remaining_retraces--;
+ 
+-        // If the game has started, handle sending VI and AI events.
+-        if (ultramodern::is_game_started()) {
+-            remaining_retraces--;
+-            
+-            std::lock_guard lock{ events_context.message_mutex };
+-            ViState* cur_state = events_context.vi.get_cur_state();
+-            if (remaining_retraces == 0) {
+-                if (cur_state->mq != NULLPTR) {
+-                    // Send a message to the VI queue, and do not set it to be requeued if the queue was full.
+-                    // The worst case scenario is that the game misses a VI message and has to wait a little longer for the next. 
+-                    ultramodern::enqueue_external_message_src(cur_state->mq, cur_state->msg, false, ultramodern::EventMessageSource::Vi);
+-                }
+-                remaining_retraces = cur_state->retrace_count;
+-            }
+-            if (events_context.ai.mq != NULLPTR) {
+-                // Send a message to the VI queue, and do not set it to be requeued if the queue was full for the same reason as the VI message above.
+-                ultramodern::enqueue_external_message_src(events_context.ai.mq, events_context.ai.msg, false, ultramodern::EventMessageSource::Ai);
++        std::lock_guard lock{ events_context.message_mutex };
++        ViState* cur_state = events_context.vi.get_cur_state();
++        if (remaining_retraces == 0) {
++            if (cur_state->mq != NULLPTR) {
++                // Send a message to the VI queue, and do not set it to be requeued if the queue was full.
++                // The worst case scenario is that the game misses a VI message and has to wait a little longer for the next.
++                ultramodern::enqueue_external_message_src(cur_state->mq, cur_state->msg, false, ultramodern::EventMessageSource::Vi);
+             }
++            remaining_retraces = cur_state->retrace_count;
+         }
+-
+-        if (events_callbacks.vi_callback != nullptr) {
+-            events_callbacks.vi_callback();
++        if (events_context.ai.mq != NULLPTR) {
++            // Send a message to the VI queue, and do not set it to be requeued if the queue was full for the same reason as the VI message above.
++            ultramodern::enqueue_external_message_src(events_context.ai.mq, events_context.ai.msg, false, ultramodern::EventMessageSource::Ai);
+         }
+     }
++
++    if (events_callbacks.vi_callback != nullptr) {
++        events_callbacks.vi_callback();
++    }
++}
++
++void TaskDone::wait() {
++    using namespace std::chrono_literals;
++    std::unique_lock lock{mutex};
++    while (!done && !exited) wake.wait_for(lock, 50ms);
+ }
+ 
+ void sp_complete() {
+@@ -287,14 +294,20 @@ void task_thread_func(uint8_t* rdram, moodycamel::LightweightSemaphore* thread_r
+         if (task == nullptr) {
+             return;
+         }
++        std::shared_ptr<TaskDone> done;
++        {
++            std::lock_guard lock{events_context.sp_task_done_mutex};
++            done = std::move(events_context.sp_task_done.front());
++            events_context.sp_task_done.pop_front();
++        }
+ 
+         if (!ultramodern::rsp::run_task(PASS_RDRAM task)) {
+             fprintf(stderr, "Failed to execute task type: %" PRIu32 "\n", task->t.type);
+             ULTRAMODERN_QUICK_EXIT();
+         }
+ 
+-        // Tell the game that the RSP has completed
+-        sp_complete();
++        // The game is told at the task's guest-time deadline, not when the host finished.
++        done->signal();
+     }
+ }
+ 
+@@ -364,11 +377,7 @@ void gfx_thread_func(uint8_t* rdram, moodycamel::LightweightSemaphore* thread_re
+         if (events_context.action_queue.wait_dequeue_timed(action, 1ms)) {
+             // Determine the action type and act on it
+             if (const auto* task_action = std::get_if<SpTaskAction>(&action)) {
+-                // Tell the game that the RSP completed instantly. This will allow it to queue other task types, but it won't
+-                // start another graphics task until the RDP is also complete. Games usually preserve the RSP inputs until the RDP
+-                // is finished as well, so sending this early shouldn't be an issue in most cases.
+-                // If this causes issues then the logic can be replaced with responding to yield requests.
+-                sp_complete();
++                // HLE must finish consuming guest display-list memory before the game may recycle it.
+                 ultramodern::measure_input_latency();
+ 
+                 PTR(u64) displaylist = task_action->task.t.data_ptr;
+@@ -376,9 +385,9 @@ void gfx_thread_func(uint8_t* rdram, moodycamel::LightweightSemaphore* thread_re
+ 
+                 [[maybe_unused]] auto renderer_start = std::chrono::high_resolution_clock::now();
+                 renderer_context->send_dl(&task_action->task);
++                task_action->done->signal();
+                 [[maybe_unused]] auto renderer_end = std::chrono::high_resolution_clock::now();
+ 
+-                dp_complete();
+                 // TODO hook the parsed event up to the actual parsing point when a callback is added to RT64.
+                 ultramodern::extensions::on_displaylist_parsed(displaylist);
+                 ultramodern::extensions::on_displaylist_completed(displaylist);
+@@ -566,11 +575,22 @@ void ultramodern::submit_rsp_task(RDRAM_ARG PTR(OSTask) task_) {
+     OSTask* task = TO_PTR(OSTask, task_);
+ 
+     // Send gfx tasks to the graphics action queue
+-    if (task->t.type == M_GFXTASK) {
+-        events_context.action_queue.enqueue(SpTaskAction{ *task });
++    auto done = std::make_shared<TaskDone>();
++    const bool gfx = task->t.type == M_GFXTASK;
++    ultramodern::vclock_schedule(ultramodern::vclock_now_ns() + (gfx ? gfx_task_ns : rsp_task_ns), [done, gfx] {
++        done->wait();
++        sp_complete();
++        if (gfx) dp_complete();
++    });
++    if (gfx) {
++        events_context.action_queue.enqueue(SpTaskAction{ *task, done });
+     }
+     // Set all other tasks as the RSP task
+     else {
++        {
++            std::lock_guard lock{events_context.sp_task_done_mutex};
++            events_context.sp_task_done.push_back(done);
++        }
+         events_context.sp_task_queue.enqueue(task);
+     }
+ }
+@@ -619,12 +639,12 @@ void ultramodern::init_events(RDRAM_ARG ultramodern::renderer::WindowHandle wind
+         throw std::runtime_error("Failed to initialize the renderer");
+     }
+ 
+-    events_context.vi.thread = std::thread{ vi_thread_func };
++    // The first retrace is due at guest time zero.
++    ultramodern::vclock_schedule(0, vi_event);
+ }
+ 
+ void ultramodern::join_event_threads() {
+     events_context.sp.gfx_thread.join();
+-    events_context.vi.thread.join();
+ 
+     // Send a null RSP task to indicate that the RSP task thread should exit.
+     events_context.sp_task_queue.enqueue(nullptr);
+diff --git a/ultramodern/src/mesgqueue.cpp b/ultramodern/src/mesgqueue.cpp
+index 9944a02..9f9db05 100644
+--- a/ultramodern/src/mesgqueue.cpp
++++ b/ultramodern/src/mesgqueue.cpp
+@@ -50,9 +50,16 @@ void dequeue_external_messages(RDRAM_ARG1) {
+     }
+ }
+ 
++// An idle guest waits in guest time: with no message queued, guest time jumps to the next device
++// event instead of waiting for a host thread to produce one.
+ void ultramodern::wait_for_external_message(RDRAM_ARG1) {
+     QueuedMessage to_send;
+-    external_messages.wait_dequeue(to_send);
++    while (!external_messages.try_dequeue(to_send)) {
++        if (!ultramodern::vclock_idle(UINT64_MAX)) {
++            // No event is scheduled at all (not expected while the VI runs); do not spin.
++            std::this_thread::sleep_for(std::chrono::milliseconds{1});
++        }
++    }
+     if (!do_send(PASS_RDRAM to_send.mq, to_send.mesg, to_send.jam, false) && to_send.requeue_if_blocked) {
+         external_messages.enqueue(to_send);
+     }
+@@ -60,10 +67,14 @@ void ultramodern::wait_for_external_message(RDRAM_ARG1) {
+ 
+ void ultramodern::wait_for_external_message_timed(RDRAM_ARG u32 millis) {
+     QueuedMessage to_send;
+-    if (external_messages.wait_dequeue_timed(to_send, std::chrono::milliseconds{millis})) {
+-        if (!do_send(PASS_RDRAM to_send.mq, to_send.mesg, to_send.jam, false) && to_send.requeue_if_blocked) {
+-            external_messages.enqueue(to_send);
+-        }
++    const uint64_t deadline = ultramodern::vclock_now_ns() + uint64_t(millis) * 1000000;
++    while (!external_messages.try_dequeue(to_send)) {
++        const uint64_t now = ultramodern::vclock_now_ns();
++        if (now >= deadline) return;
++        ultramodern::vclock_idle(deadline - now);
++    }
++    if (!do_send(PASS_RDRAM to_send.mq, to_send.mesg, to_send.jam, false) && to_send.requeue_if_blocked) {
++        external_messages.enqueue(to_send);
+     }
+ }
+ 
+diff --git a/ultramodern/src/timer.cpp b/ultramodern/src/timer.cpp
+index ee26c45..b102af2 100644
+--- a/ultramodern/src/timer.cpp
++++ b/ultramodern/src/timer.cpp
+@@ -1,7 +1,8 @@
+ #include <thread>
+-#include <variant>
+-#include <set>
+-#include "blockingconcurrentqueue.h"
++#include <atomic>
++#include <map>
++#include <mutex>
++#include <functional>
+ 
+ #include "ultramodern/ultra64.h"
+ #include "ultramodern/ultramodern.hpp"
+@@ -11,14 +12,78 @@
+ #include "Windows.h"
+ #endif
+ 
+-// Start time for the program
+-static std::chrono::high_resolution_clock::time_point start_time = std::chrono::high_resolution_clock::now();
+-// Offset of the duration since program start used to calculate the value for osGetTime. 
++// Offset of the virtual time used to calculate the value for osGetTime.
+ static int64_t ostime_offset = 0;
+-// Game speed multiplier (1 means no speedup)
+-constexpr uint32_t speed_multiplier = 1;
+ // N64 CPU counter ticks per millisecond
+-constexpr uint32_t counter_per_ms = 46'875 * speed_multiplier;
++constexpr uint32_t counter_per_ms = 46'875;
++
++namespace {
++std::mutex vclock_mutex;
++std::atomic<uint64_t> vclock_ns{0};
++uint64_t vclock_next_id = 1;
++std::map<std::pair<uint64_t, uint64_t>, std::function<void()>> vclock_events; // (when, id) -> fn
++std::map<uint64_t, uint64_t> vclock_when;                                      // id -> when
++}
++
++uint64_t ultramodern::vclock_now_ns() {
++    return vclock_ns.load(std::memory_order_acquire);
++}
++
++uint64_t ultramodern::vclock_schedule(uint64_t when_ns, std::function<void()> fn) {
++    std::lock_guard lock{vclock_mutex};
++    const uint64_t id = vclock_next_id++;
++    vclock_events.emplace(std::make_pair(when_ns, id), std::move(fn));
++    vclock_when.emplace(id, when_ns);
++    return id;
++}
++
++void ultramodern::vclock_cancel(uint64_t id) {
++    std::lock_guard lock{vclock_mutex};
++    auto when = vclock_when.find(id);
++    if (when == vclock_when.end()) return;
++    vclock_events.erase(std::make_pair(when->second, id));
++    vclock_when.erase(when);
++}
++
++static std::function<void()> vclock_idle_hook;
++
++// Pops the earliest event due at or before limit_ns and runs it at its due time.
++static bool vclock_run_next(uint64_t limit_ns) {
++    std::function<void()> fn;
++    uint64_t when;
++    {
++        std::lock_guard lock{vclock_mutex};
++        auto first = vclock_events.begin();
++        if (first == vclock_events.end() || first->first.first > limit_ns) return false;
++        when = first->first.first;
++        fn = std::move(first->second);
++        vclock_when.erase(first->first.second);
++        vclock_events.erase(first);
++    }
++    // An event sees the time it was due, even when one advance spans several.
++    if (when > vclock_ns.load(std::memory_order_relaxed)) vclock_ns.store(when, std::memory_order_release);
++    fn();
++    return true;
++}
++
++void ultramodern::vclock_advance(uint64_t delta_ns) {
++    const uint64_t target = vclock_ns.load(std::memory_order_acquire) + delta_ns;
++    while (vclock_run_next(target)) {}
++    if (target > vclock_ns.load(std::memory_order_relaxed)) vclock_ns.store(target, std::memory_order_release);
++}
++
++bool ultramodern::vclock_idle(uint64_t max_wait_ns) {
++    const uint64_t now = vclock_ns.load(std::memory_order_acquire);
++    const uint64_t limit = max_wait_ns == UINT64_MAX ? UINT64_MAX : now + max_wait_ns;
++    const bool ran = vclock_run_next(limit);
++    if (!ran && max_wait_ns != UINT64_MAX) vclock_advance(max_wait_ns);
++    if (vclock_idle_hook) vclock_idle_hook();
++    return ran;
++}
++
++void ultramodern::set_vclock_idle_hook(std::function<void()> hook) {
++    vclock_idle_hook = std::move(hook);
++}
+ 
+ struct OSTimer {
+     PTR(OSTimer) unused1;
+@@ -29,132 +94,47 @@ struct OSTimer {
+     OSMesg msg;
+ };
+ 
+-struct AddTimerAction {
+-    PTR(OSTimer) timer;
+-};
+-
+-struct RemoveTimerAction {
+-    PTR(OSTimer) timer;
+-};
+-
+-using Action = std::variant<AddTimerAction, RemoveTimerAction>;
+-
+-struct {
+-    std::thread thread;
+-    moodycamel::BlockingConcurrentQueue<Action> action_queue{};
+-} timer_context;
+-
+-uint64_t duration_to_ticks(std::chrono::high_resolution_clock::duration duration) {
+-    uint64_t delta_micros = std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
+-    // More accurate than using a floating point timer, will only overflow after running for 12.47 years
+-    // Units: (micros * (counts/millis)) / (micros/millis) = counts
+-    uint64_t total_count = (delta_micros * counter_per_ms) / 1000;
+-
+-    return total_count;
+-}
+-
+-std::chrono::microseconds ticks_to_duration(uint64_t ticks) {
+-    using namespace std::chrono_literals;
+-    return ticks * 1000us / counter_per_ms;
+-}
+-
+-std::chrono::high_resolution_clock::time_point ticks_to_timepoint(uint64_t ticks) {
+-    return start_time + ticks_to_duration(ticks);
++static uint64_t ticks_to_ns(uint64_t ticks) {
++    return (ticks / counter_per_ms) * 1000000 + (ticks % counter_per_ms) * 1000000 / counter_per_ms;
+ }
+ 
+ uint64_t time_now() {
+-    return duration_to_ticks(std::chrono::high_resolution_clock::now() - start_time);
++    return (ultramodern::vclock_now_ns() * counter_per_ms) / 1000000;
+ }
+ 
+-void timer_thread(RDRAM_ARG1) {
+-    ultramodern::set_native_thread_name("Timer Thread");
+-    ultramodern::set_native_thread_priority(ultramodern::ThreadPriority::VeryHigh);
+-
+-    // Lambda comparator function to keep the set ordered
+-    auto timer_sort = [PASS_RDRAM1](PTR(OSTimer) a_, PTR(OSTimer) b_) {
+-        OSTimer* a = TO_PTR(OSTimer, a_);
+-        OSTimer* b = TO_PTR(OSTimer, b_);
++static std::mutex timer_mutex;
++static std::map<OSTimer*, uint64_t> active_timers; // timer -> vclock event id
+ 
+-        // Order by timestamp if the timers have different timestamps
+-        if (a->timestamp != b->timestamp) {
+-            return a->timestamp < b->timestamp;
++static void arm_timer(OSTimer* t) {
++    // Callers hold timer_mutex.
++    active_timers[t] = ultramodern::vclock_schedule(ticks_to_ns(t->timestamp), [t] {
++        {
++            std::lock_guard lock{timer_mutex};
++            active_timers.erase(t);
+         }
+-
+-        // If they have the exact same timestamp then order by address instead
+-        return a < b;
+-    };
+-
+-    // Ordered set of timers that are currently active
+-    std::set<PTR(OSTimer), decltype(timer_sort)> active_timers{timer_sort};
+-    
+-    // Lambda to process a timer action to handle adding and removing timers
+-    auto process_timer_action = [&](const Action& action) {
+-        // Determine the action type and act on it
+-        if (const auto* add_action = std::get_if<AddTimerAction>(&action)) {
+-            active_timers.insert(add_action->timer);
+-        } else if (const auto* remove_action = std::get_if<RemoveTimerAction>(&action)) {
+-            active_timers.erase(remove_action->timer);
++        ultramodern::enqueue_external_message_src(t->mq, t->msg, false, ultramodern::EventMessageSource::Timer);
++        // If the timer has a specified interval then reload it with that value
++        if (t->interval != 0) {
++            t->timestamp = t->interval + time_now();
++            std::lock_guard lock{timer_mutex};
++            arm_timer(t);
+         }
+-    };
+-
+-    while (true) {
+-        // Empty the action queue
+-        Action cur_action;
+-        while (timer_context.action_queue.try_dequeue(cur_action)) {
+-            process_timer_action(cur_action);
+-        }
+-
+-        // If there's no timer to act on, wait for one to come in from the action queue
+-        while (active_timers.empty()) {
+-            timer_context.action_queue.wait_dequeue(cur_action);
+-            process_timer_action(cur_action);
+-        }
+-
+-        // Get the timer that's closest to running out
+-        PTR(OSTimer) cur_timer_ = *active_timers.begin();
+-        OSTimer* cur_timer = TO_PTR(OSTimer, cur_timer_);
+-
+-        // Remove the timer from the queue (it may get readded if waiting is interrupted)
+-        active_timers.erase(cur_timer_);
+-
+-        // Determine how long to wait to reach the timer's timestamp
+-        auto wait_duration = ticks_to_timepoint(cur_timer->timestamp) - std::chrono::high_resolution_clock::now();
+-
+-        // Wait for either the duration to complete or a new action to come through
+-        if (wait_duration.count() >= 0 && timer_context.action_queue.wait_dequeue_timed(cur_action, wait_duration)) {
+-            // Timer was interrupted by a new action 
+-            // Add the current timer back to the queue (done first in case the action is to remove this timer)
+-            active_timers.insert(cur_timer_);
+-            // Process the new action
+-            process_timer_action(cur_action);
+-        }
+-        else {
+-            // Waiting for the timer completed, so send the timer's message to its message queue
+-            ultramodern::enqueue_external_message_src(cur_timer->mq, cur_timer->msg, false, ultramodern::EventMessageSource::Timer);
+-            // If the timer has a specified interval then reload it with that value
+-            if (cur_timer->interval != 0) {
+-                cur_timer->timestamp = cur_timer->interval + time_now();
+-                active_timers.insert(cur_timer_);
+-            }
+-        }
+-    }
++    });
+ }
+ 
+ void ultramodern::init_timers(RDRAM_ARG1) {
+-    timer_context.thread = std::thread{ timer_thread, PASS_RDRAM1 };
+-    timer_context.thread.detach();
+ }
+ 
+ uint32_t ultramodern::get_speed_multiplier() {
+-    return speed_multiplier;
++    return 1;
+ }
+ 
+ std::chrono::high_resolution_clock::time_point ultramodern::get_start() {
+-    return start_time;
++    return std::chrono::high_resolution_clock::time_point{};
+ }
+ 
+ std::chrono::high_resolution_clock::duration ultramodern::time_since_start() {
+-    return std::chrono::high_resolution_clock::now() - start_time;
++    return std::chrono::nanoseconds{ultramodern::vclock_now_ns()};
+ }
+ 
+ extern "C" u32 osGetCount() {
+@@ -192,13 +172,21 @@ extern "C" int osSetTimer(RDRAM_ARG PTR(OSTimer) t_, OSTime countdown, OSTime in
+     t->mq = mq;
+     t->msg = msg;
+ 
+-    timer_context.action_queue.enqueue(AddTimerAction{ t_ });
++    std::lock_guard lock{timer_mutex};
++    if (auto old = active_timers.find(t); old != active_timers.end()) {
++        ultramodern::vclock_cancel(old->second);
++    }
++    arm_timer(t);
+ 
+     return 0;
+ }
+ 
+ extern "C" int osStopTimer(RDRAM_ARG PTR(OSTimer) t_) {
+-    timer_context.action_queue.enqueue(RemoveTimerAction{ t_ });
++    std::lock_guard lock{timer_mutex};
++    if (auto old = active_timers.find(TO_PTR(OSTimer, t_)); old != active_timers.end()) {
++        ultramodern::vclock_cancel(old->second);
++        active_timers.erase(old);
++    }
+ 
+     // TODO don't blindly return 0 here; requires some response from the timer thread to know what the returned value was
+     return 0;
