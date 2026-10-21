@@ -65,6 +65,7 @@ BEHAVE_UNALIGNED_STORE(sdr, 7u)
 
 #define TRACE_ENTRY() behave_enter(__func__, rdram, ctx);
 #define TRACE_RETURN()
+#define TRACE_LOOP() /* trace-mode backward branches; a spinning original is bounded by the case timeout */
 #define probe_stub(name) behave_stub(name, rdram, ctx)
 
 #undef MEM_W
