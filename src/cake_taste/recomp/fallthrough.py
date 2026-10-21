@@ -74,7 +74,8 @@ def link_fallthroughs(funcs: Path, symbols: Path) -> list[dict[str, str | int]]:
                             for _, args in instructions.values())
         if previous and _terminal(*previous) and not slot_targeted:
             continue
-        closing = body.rfind("}")
+        # Before the generator's closing ";}" so every body keeps the one ending the closure reader splits on.
+        closing = body.rfind(";}")
         if closing < 0:
             raise TasteError("recomp.fallthrough", f"missing function end for {name}")
         addition = f"\n    {_MARKER}\n    {target}(rdram, ctx);\n    return;\n"

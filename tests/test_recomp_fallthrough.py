@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from cake_taste.recomp.fallthrough import link_fallthroughs
+from cake_taste.repro.closure import index_bodies
 
 
 def function(name, instructions, statements=""):
@@ -39,6 +40,7 @@ class FallthroughTests(unittest.TestCase):
         links = link_fallthroughs(self.funcs, self.symbols)
         self.assertEqual([(x['function'], x['next']) for x in links], [('static_0_80001000', 'body')])
         self.assertEqual(link_fallthroughs(self.funcs, self.symbols), [])
+        self.assertEqual(set(index_bodies(self.funcs)), {"static_0_80001000", "body"})
         wrapper = self.path / "fixture.c"
         wrapper.write_text('#include <stdint.h>\n#define RECOMP_FUNC\n'
                            'typedef struct { int base; } recomp_context;\n'
