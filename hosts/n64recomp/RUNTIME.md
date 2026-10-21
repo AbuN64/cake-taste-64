@@ -287,6 +287,12 @@ unset the host behaves as before. It knows nothing about any game.
   steps are paced by emulated video, not wall time. Needs `N64R_GOLDEN_DIR`.
 - `N64R_SHOT_CMD`: shell template run at each checkpoint; `%s` is the PNG path
   (`<dir>/vi-<checkpoint>.png`). Needs `N64R_GOLDEN_DIR`.
+- `N64R_TAS_PLAY`: a raw controller movie, one `BUTTONS X Y` line per guest
+  controller poll (hex buttons), the same file a native port replays. It
+  replaces channel 0 poll by poll, so both replays are keyed to the guest's own
+  polls. `N64R_TAS_SHOT_EVERY` (N) checkpoints `poll-<n>` every N polls;
+  `N64R_TAS_EXIT_AFTER` (N) quits N polls after the movie ends. Needs
+  `N64R_GOLDEN_DIR`.
 
 Every ROM DMA is a `pi` event: `rom` offset, `ram` physical destination, `len`, `thread`, and `req`,
 the requesters, nearest first. Each level is the thread that sent the message the DMA thread last

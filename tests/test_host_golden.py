@@ -9,7 +9,8 @@ class GoldenDocsTest(unittest.TestCase):
     def test_every_golden_env_var_is_documented(self):
         source = (HOST / "golden.cpp").read_text(encoding="utf-8")
         names = set(re.findall(r"getenv\(\"(N64R_[A-Z_]+)\"\)", source))
-        self.assertEqual(names, {"N64R_GOLDEN_DIR", "N64R_SCRIPT", "N64R_SHOT_CMD"})
+        expected = {"N64R_GOLDEN_DIR", "N64R_SCRIPT", "N64R_SHOT_CMD"}
+        self.assertEqual(names, expected | {"N64R_TAS_PLAY", "N64R_TAS_SHOT_EVERY", "N64R_TAS_EXIT_AFTER"})
         docs = (HOST / "RUNTIME.md").read_text(encoding="utf-8")
         for name in names:
             self.assertIn(f"`{name}`", docs)
@@ -30,7 +31,7 @@ class GoldenDocsTest(unittest.TestCase):
 
     def test_scripted_quit_flushes_then_exits_without_runtime_teardown(self):
         source = (HOST / "golden.cpp").read_text(encoding="utf-8")
-        quit_step = source[source.index('st.kind == "quit"'):]
+        quit_step = source[source.index("void quit(uint64_t now)"):]
         self.assertLess(quit_step.index('write_trace("final")'), quit_step.index("std::_Exit(0)"))
         self.assertIn("without runtime\nteardown", (HOST / "RUNTIME.md").read_text(encoding="utf-8"))
 if __name__ == "__main__":

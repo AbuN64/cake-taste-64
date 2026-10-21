@@ -3,6 +3,9 @@
 //   N64R_GOLDEN_DIR   output directory (events.jsonl, dl-*.bin, acmd-all.bin, pcm-all.s16, trace-*.tsv)
 //   N64R_SCRIPT       lines "<vi> key <Name>", "<vi> checkpoint <name>", "<vi> quit" (vi = retrace count)
 //   N64R_SHOT_CMD     shell template run at a checkpoint; "%s" is replaced by the PNG path
+//   N64R_TAS_PLAY     raw controller movie, one "BUTTONS X Y" line per guest controller poll (hex buttons), the
+//                     same file a native port replays; N64R_TAS_SHOT_EVERY=N checkpoints "poll-<n>" every N polls,
+//                     N64R_TAS_EXIT_AFTER=N quits N polls after the movie ends
 #include <SDL.h>
 #include <array>
 #include <atomic>
@@ -33,6 +36,9 @@ FILE *events, *acmd_all, *pcm_all;
 std::string &dir = *new std::string, &shot_cmd = *new std::string;
 std::vector<Step> &steps = *new std::vector<Step>;
 size_t next_step = 0;
+FILE *movie;  // N64R_TAS_PLAY
+uint64_t polls, played, shot_every, exit_after = UINT64_MAX;
+bool movie_done;
 std::string &armed = *new std::string;   // checkpoint waiting for its first graphics task
 uint64_t acmd_seq = 0, acmd_bytes = 0, pcm_samples = 0, dl_seq = 0;
 unsigned pcm_rate = 0;
@@ -87,6 +93,17 @@ void checkpoint(const std::string &name) {
         std::fprintf(events, "{\"ev\":\"shot\",\"name\":\"%s\",\"rc\":%d}\n", name.c_str(), rc);
     }
 }
+
+void quit(uint64_t now) {
+    std::fprintf(events, "{\"ev\":\"quit\",\"vi\":%llu}\n", (unsigned long long)now);
+    std::fflush(events);
+    write_trace("final");
+    std::fflush(acmd_all); std::fflush(pcm_all);
+    // Everything is on disk. Runtime teardown races the running guest threads (a crash after the
+    // goldens are written), so a scripted quit ends the process here with a clean status.
+    std::fflush(stdout); std::fflush(stderr);
+    std::_Exit(0);
+}
 }  // namespace
 
 extern "C" void n64host_golden_init() {
@@ -107,6 +124,12 @@ extern "C" void n64host_golden_init() {
             if (is >> st.vi >> st.kind) { is >> st.arg; steps.push_back(st); }
         }
     }
+    if (const char *m = std::getenv("N64R_TAS_PLAY")) {
+        movie = std::fopen(m, "r");
+        if (!movie) { std::fprintf(stderr, "n64host: cannot read movie %s\n", m); std::_Exit(5); }
+        if (const char *e = std::getenv("N64R_TAS_SHOT_EVERY")) shot_every = std::strtoull(e, nullptr, 10);
+        if (const char *e = std::getenv("N64R_TAS_EXIT_AFTER")) exit_after = std::strtoull(e, nullptr, 10);
+    }
     armed = "boot";  // the very first graphics task is the "boot" golden
 }
 
@@ -123,19 +146,42 @@ extern "C" void n64host_golden_vi() {
         } else if (st.kind == "checkpoint") {
             checkpoint(st.arg);
         } else if (st.kind == "quit") {
-            std::fprintf(events, "{\"ev\":\"quit\",\"vi\":%llu}\n", (unsigned long long)now);
-            std::fflush(events);
-            write_trace("final");
-            std::fflush(acmd_all); std::fflush(pcm_all);
-            // Everything is on disk. Runtime teardown races the running guest threads (a crash after the
-            // goldens are written), so a scripted quit ends the process here with a clean status.
-            std::fflush(stdout); std::fflush(stderr);
-            std::_Exit(0);
+            quit(now);
         }
     }
 }
 
 extern "C" uint64_t n64host_golden_frame() { return vi_count.load(); }
+
+// Called by the SI adapter for each controller read of channel 0. Returns true when a movie supplies the pad, so a
+// replay is keyed to the guest's own polls exactly as the port keys it.
+extern "C" bool n64host_golden_pad(uint16_t *buttons, int8_t *x, int8_t *y) {
+    if (!on() || !movie) return false;
+    std::lock_guard g(lock);
+    char line[64];
+    unsigned b = 0;
+    int sx = 0, sy = 0;
+    *buttons = 0; *x = *y = 0;
+    while (!movie_done) {
+        if (!std::fgets(line, sizeof line, movie)) {
+            movie_done = true;
+            std::fprintf(events, "{\"ev\":\"movie_end\",\"poll\":%llu}\n", (unsigned long long)played);
+            break;
+        }
+        if (line[0] == '#' || line[0] == '\n') continue;
+        if (std::sscanf(line, "%x %d %d", &b, &sx, &sy) != 3) {
+            std::fprintf(stderr, "n64host: bad movie line after poll %llu: %s", (unsigned long long)played, line);
+            std::_Exit(5);
+        }
+        *buttons = uint16_t(b); *x = int8_t(sx); *y = int8_t(sy);
+        ++played;
+        break;
+    }
+    ++polls;
+    if (shot_every && polls % shot_every == 0) checkpoint("poll-" + std::to_string(polls));
+    if (movie_done && polls - played >= exit_after) quit(vi_count.load());
+    return true;
+}
 
 extern "C" void n64host_golden_entry(const char *name, unsigned thread) {
     if (!on()) return;

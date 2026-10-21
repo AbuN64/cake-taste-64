@@ -27,6 +27,8 @@ void(*set_rumble)(int,bool);connected_device_info_t(*get_connected_device_info)(
 }
 ''')
             (p / 'mock.cpp').write_text(r'''
+#include <cstdint>
+extern "C" bool n64host_golden_pad(uint16_t *, int8_t *, int8_t *) { return false; }  // no movie
 #include <cassert>
 #include <cstring>
 #include "librecomp/game.hpp"
