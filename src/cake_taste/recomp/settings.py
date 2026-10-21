@@ -8,7 +8,7 @@ from typing import Any
 
 from cake_taste import TasteError
 
-_REQUIRED = {"decomp_root", "layout_glob", "symbols_file", "asm_dir", "roms", "gen_root", "tools"}
+_REQUIRED = {"decomp_root", "layout_glob", "symbols_file", "elf", "roms", "gen_root", "tools"}
 _OPTIONAL = {
     "entrypoint",
     "trace_mode",
@@ -30,7 +30,7 @@ class Settings:
     decomp_root: Path
     layout_glob: str
     symbols_file: str
-    asm_dir: str
+    elf: str
     roms: dict[str, Path]
     gen_root: Path
     n64recomp: Path
@@ -72,8 +72,8 @@ class Settings:
     def symbols_path(self, version: str) -> Path:
         return self.decomp_root / self.symbols_file.format(version=version)
 
-    def asm_path(self, version: str) -> Path:
-        return self.decomp_root / self.asm_dir.format(version=version)
+    def elf_path(self, version: str) -> Path:
+        return self.decomp_root / self.elf.format(version=version)
 
     def rom(self, version: str) -> Path:
         if version not in self.roms:
@@ -95,7 +95,7 @@ def load(profile: Any) -> Settings:
     missing, extra = _REQUIRED - raw.keys(), raw.keys() - _REQUIRED - _OPTIONAL
     if missing or extra:
         raise TasteError("config.schema", f"recomp: missing {sorted(missing)} unknown {sorted(extra)}")
-    for key in ("layout_glob", "symbols_file", "asm_dir"):
+    for key in ("layout_glob", "symbols_file", "elf"):
         if not isinstance(raw[key], str) or "{version}" not in raw[key]:
             raise TasteError("config.schema", f"recomp.{key}: expected a string containing {{version}}")
     roms, tools = raw["roms"], raw["tools"]
@@ -169,7 +169,7 @@ def load(profile: Any) -> Settings:
         decomp_root=profile.resolve_path(raw["decomp_root"]),
         layout_glob=raw["layout_glob"],
         symbols_file=raw["symbols_file"],
-        asm_dir=raw["asm_dir"],
+        elf=raw["elf"],
         roms={str(k): profile.resolve_path(v) for k, v in roms.items()},
         gen_root=profile.resolve_path(raw["gen_root"]),
         n64recomp=profile.resolve_path(tools["n64recomp"]),

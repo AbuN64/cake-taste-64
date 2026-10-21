@@ -34,9 +34,6 @@ def probe_story(script: Path, function: str | None, overrides: dict[str, Any], p
             name = resolve_target(story["function"], vrams)
             story["function"] = name
             story.setdefault("owner_address", f"{vrams[name]:#010x}")
-            source = settings.asm_path(request["version"]) / (name + ".s")
-            if source.exists():
-                story.setdefault("decomp_path", str(source))
     story.setdefault("question", "Observe the original behavior of " + story["function"])
     story.setdefault("owner_address", "unknown")
     story.setdefault("decomp_path", "unknown")

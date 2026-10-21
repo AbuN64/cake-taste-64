@@ -1,4 +1,5 @@
 import json
+import struct
 import tempfile
 import tomllib
 import unittest
@@ -52,35 +53,47 @@ segments:
   - [0x6000]
 """
 
-ASM = """.include "macro.inc"
-nonmatching first, 0x8
-glabel first
-    /* 1000 80200400 24020001 */  addiu $v0, $zero, 0x1
-    /* 1004 80200404 03E00008 */  jr $ra
-endlabel first
-nonmatching second, 0x4
-glabel second
-    /* 1008 80200408 03E00008 */  jr $ra
-endlabel second
-"""
+FUNCTIONS = [  # name, section, vram, size: the decomp's link as the recompiler reads it
+    ("first", "boot_code", 0x80200400, 8),
+    ("second", "boot_code", 0x80200408, 4),
+    ("ovl_fn", "ovl_a", 0x80400000, 4),
+    ("ovl_fn2", "ovl_b", 0x80400000, 4),
+    ("second", "ovl_b", 0x8040000C, 4),
+]
+SECTIONS = {"boot_code": 0x80200400, "ovl_a": 0x80400000, "ovl_b": 0x80400000}
 
 
-def row(rom, vram):
-    return f"    /* {rom:X} {vram:08X} 03E00008 */  jr $ra\n"
+def write_elf(path: Path, functions=FUNCTIONS, sections=SECTIONS) -> None:
+    """A minimal big-endian ELF32 with one PROGBITS section per segment and a symbol table of sized functions."""
+    shnames = b"\0" + b"".join(b"." + n.encode() + b"\0" for n in sections) + b".symtab\0.strtab\0.shstrtab\0"
+    strtab, symtab = b"\0", bytes(16)
+    index = {name: i + 1 for i, name in enumerate(sections)}
+    for name, section, vram, size in functions:
+        symtab += struct.pack(">IIIBBH", len(strtab), vram, size, 0x12, 0, index[section])
+        strtab += name.encode() + b"\0"
+    body = symtab + strtab + shnames
+    shoff = 52 + len(body)
+    headers = [bytes(40)]
+    name_at = 1
+    for name, addr in sections.items():
+        headers.append(struct.pack(">10I", name_at, 1, 6, addr, 52, 0, 0, 0, 4, 0))
+        name_at += len(name) + 2
+    symtab_name, strtab_name, shstr_name = name_at, name_at + 8, name_at + 16
+    count = len(sections)
+    headers.append(struct.pack(">10I", symtab_name, 2, 0, 0, 52, len(symtab), count + 2, 1, 4, 16))
+    headers.append(struct.pack(">10I", strtab_name, 3, 0, 0, 52 + len(symtab), len(strtab), 0, 0, 1, 0))
+    headers.append(struct.pack(">10I", shstr_name, 3, 0, 0, 52 + len(symtab) + len(strtab), len(shnames), 0, 0, 1, 0))
+    ident = b"\x7fELF\x01\x02\x01" + bytes(9)
+    header = ident + struct.pack(">HHIIIIIHHHHHH", 2, 8, 1, 0, 0, shoff, 0, 52, 0, 0, 40, len(headers), count + 3)
+    path.write_bytes(header + body + b"".join(headers))
 
 
 def build(root: Path, tool_body: str = "", rsp_config: dict | None = None) -> object:
     decomp = root / "decomp"
     (decomp / "versions/v1").mkdir(parents=True)
-    (decomp / "asm/v1").mkdir(parents=True)
     (decomp / "versions/v1/g.yaml").write_text(YAML)
     (decomp / "versions/v1/symbol_addrs.txt").write_text("second = 0x80200408; // type:func\nD_1 = 0x80200408;\n")
-    (decomp / "asm/v1/a.s").write_text(ASM)
-    (decomp / "asm/v1/b.s").write_text(
-        "glabel ovl_fn\n" + row(0x2000, 0x80400000) + "endlabel ovl_fn\n"
-        "glabel ovl_fn2\n" + row(0x3000, 0x80400000) + "endlabel ovl_fn2\n"
-        "glabel second\n" + row(0x300C, 0x8040000C) + "endlabel second\n"
-    )
+    write_elf(decomp / "versions/v1/link.elf")
     rom = root / "rom.z64"
     rom.write_bytes(bytes(8) + (0x80200400).to_bytes(4, "big") + bytes(0x6000))
     tool = root / "n64recomp"
@@ -96,7 +109,7 @@ def build(root: Path, tool_body: str = "", rsp_config: dict | None = None) -> ob
                 "decomp_root": "decomp",
                 "layout_glob": "versions/{version}/*.yaml",
                 "symbols_file": "versions/{version}/symbol_addrs.txt",
-                "asm_dir": "asm/{version}",
+                "elf": "versions/{version}/link.elf",
                 "roms": {"v1": "rom.z64"},
                 "gen_root": "gen",
                 "tools": {"n64recomp": "n64recomp", "rsprecomp": "rsprecomp"},
@@ -142,13 +155,14 @@ class RecompTests(unittest.TestCase):
         self.assertEqual(result["duplicate_names"], 1)
         self.assertIn("second_8040000C", [f["name"] for f in sections["ovl_b"]["functions"]])
 
-    def test_size_disagreeing_with_declaration_is_refused(self):
+    def test_elf_section_without_a_layout_segment_is_refused(self):
         with tempfile.TemporaryDirectory() as t:
             profile = build(Path(t))
-            asm = Path(t) / "decomp/asm/v1/a.s"
-            asm.write_text(asm.read_text().replace("first, 0x8", "first, 0xC"))
-            with self.assertRaises(TasteError):
+            write_elf(Path(t) / "decomp/versions/v1/link.elf", sections={**SECTIONS, "stray": 0x80600000},
+                      functions=[*FUNCTIONS, ("lost", "stray", 0x80600000, 4)])
+            with self.assertRaises(TasteError) as caught:
                 run(profile, ("symbols", "--version", "v1"))
+            self.assertIn(".stray names no layout segment", str(caught.exception))
 
     def test_generate_writes_config_runs_tools_and_freezes_hashes(self):
         with tempfile.TemporaryDirectory() as t:

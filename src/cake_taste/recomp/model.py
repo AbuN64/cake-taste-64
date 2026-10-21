@@ -8,7 +8,7 @@ from pathlib import Path
 
 from cake_taste import TasteError
 
-from .asmfuncs import Function, read_function_addresses, read_functions, read_symbol_names
+from .asmfuncs import Function, read_elf_functions, read_function_addresses, read_symbol_names
 from .splat import Layout, Segment
 
 
@@ -24,7 +24,7 @@ class Section:
 
 def build_sections(
     layout: Layout,
-    asm_dir: Path,
+    elf: Path,
     symbols_file: Path,
     rom_size: int | None = None,
     overrides: dict[int, str] | None = None,
@@ -38,7 +38,7 @@ def build_sections(
     used: dict[str, int] = {}
     renamed = 0
     unused_sizes = set(sizes or {})
-    functions = [(f, None) for f in read_functions(asm_dir)]
+    functions = [(f, None) for f in read_elf_functions(elf, {s.name: s.start for s in layout.segments})]
     for segment, size in spans:
         if segment.options.get("functions") and rom_size is not None and segment.start + size > rom_size:
             raise TasteError("recomp.sections", f"{segment.name} exceeds the ROM")

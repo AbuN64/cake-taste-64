@@ -49,7 +49,7 @@ def build(settings: Settings, version: str,
     layout = load_layout(settings, version)
     rom = settings.rom(version)
     size = rom.stat().st_size if rom.is_file() else None
-    sections, counts = build_sections(layout, settings.asm_path(version), settings.symbols_path(version), size,
+    sections, counts = build_sections(layout, settings.elf_path(version), settings.symbols_path(version), size,
                                        settings.names_for(version), settings.sizes_for(version), statics)
     return layout, sections, counts
 
@@ -368,13 +368,17 @@ def _rsp(settings: Settings, version: str, layout: Layout) -> dict[str, Any]:
         execution = settings.rsp_execution_vram
     else:
         segment = next((s for s in layout.segments if s.name == settings.rsp_segment), None)
-        if segment is None or segment.vram is None:
+        if segment is None:
             raise TasteError("recomp.rsp", f"segment {settings.rsp_segment} not found")
         name, start = segment.name, segment.start
         size = layout.extent(segment, settings.rom(version).stat().st_size)
         execution = settings.rsp_execution_vram
         if execution is None:
             execution = segment.options.get("execution_vram", segment.vram)
+        if execution is None:
+            raise TasteError(
+                "recomp.rsp", f"segment {segment.name} has no execution address: set rsp_audio.execution_vram"
+            )
     if execution & ~0xFFF not in (0x1000, 0x04001000) or execution & 3:
         raise TasteError("recomp.rsp", "RSP execution address must be in IMEM; ROM/storage VRAM is not executable")
     out = settings.out(version)
