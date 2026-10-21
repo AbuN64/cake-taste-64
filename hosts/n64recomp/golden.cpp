@@ -5,7 +5,8 @@
 //   N64R_SHOT_CMD     shell template run at a checkpoint; "%s" is replaced by the PNG path
 //   N64R_TAS_PLAY     raw controller movie, one "BUTTONS X Y" line per guest controller poll (hex buttons), the
 //                     same file a native port replays; N64R_TAS_SHOT_EVERY=N checkpoints "poll-<n>" every N polls,
-//                     N64R_TAS_EXIT_AFTER=N quits N polls after the movie ends
+//                     N64R_TAS_EXIT_AFTER=N quits N polls after the movie ends,
+//                     N64R_TAS_TRACE=FILE writes "poll vi" per guest controller poll (poll/VI parity with the port)
 #include <SDL.h>
 #include <array>
 #include <atomic>
@@ -178,6 +179,7 @@ extern "C" bool n64host_golden_pad(uint16_t *buttons, int8_t *x, int8_t *y) {
         break;
     }
     ++polls;
+    if (const char *t = std::getenv("N64R_TAS_TRACE")) { static FILE *tf = std::fopen(t, "w"); if (tf) { std::fprintf(tf, "%llu %llu\n", (unsigned long long)polls, (unsigned long long)vi_count.load()); std::fflush(tf); } }
     if (shot_every && polls % shot_every == 0) checkpoint("poll-" + std::to_string(polls));
     if (movie_done && polls - played >= exit_after) quit(vi_count.load());
     return true;

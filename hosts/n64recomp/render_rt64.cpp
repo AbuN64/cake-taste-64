@@ -53,6 +53,7 @@ public:
     bool update_config(const ultramodern::renderer::GraphicsConfig &, const ultramodern::renderer::GraphicsConfig &) override { return true; }
     void enable_instant_present() override {}
     void send_dl(const OSTask *task) override {
+        const auto began = std::chrono::steady_clock::now();
         n64host_golden_gfx(task->t.ucode, task->t.ucode_data, task->t.data_ptr, task->t.data_size);
         app_->state->rsp->reset();
         app_->interpreter->loadUCodeGBI(task->t.ucode & 0x3FFFFFF, task->t.ucode_data & 0x3FFFFFF, true);
@@ -61,9 +62,11 @@ public:
             task->t.ucode, task->t.ucode_data);
         app_->processDisplayLists(app_->core.RDRAM, task->t.data_ptr & 0x3FFFFFF, 0, true);
         ++tasks_;
+        dl_ns_ += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - began).count();
         if (tasks_ == 1 || tasks_ % 600 == 0)
-            std::fprintf(stderr, "n64host: graphics tasks=%llu elapsed_ms=%lld dl=0x%08X bytes=%u\n",
-                (unsigned long long)tasks_, elapsed_ms(), task->t.data_ptr, task->t.data_size);
+            std::fprintf(stderr, "n64host: graphics tasks=%llu elapsed_ms=%lld dl=0x%08X bytes=%u mean_send_dl_us=%lld\n",
+                (unsigned long long)tasks_, elapsed_ms(), task->t.data_ptr, task->t.data_size,
+                (long long)(dl_ns_ / 1000 / (long long)tasks_));
     }
     void send_dummy_workload(uint32_t) override {}
     void update_screen() override {
@@ -78,6 +81,7 @@ public:
     float get_resolution_scale() const override { return 1.0f; }
 private:
     uint64_t tasks_ = 0, screens_ = 0;
+    long long dl_ns_ = 0;
     const std::chrono::steady_clock::time_point started_ = std::chrono::steady_clock::now();
     long long elapsed_ms() const {
         return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started_).count();
