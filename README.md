@@ -13,6 +13,18 @@ python3.13 -m venv ~/.venvs/taste && . ~/.venvs/taste/bin/activate
 pip install git+https://github.com/AbuN64/cake-taste-64
 ```
 
+The recompiled oracle also needs the MIPS binutils and N64Recomp at its pin, built beside a cake-taste-64 checkout:
+
+```sh
+sudo apt install binutils-mips-linux-gnu libsdl2-dev
+git clone https://github.com/N64Recomp/N64Recomp && cd N64Recomp
+git checkout "$(awk '$1=="N64Recomp"{print $2}' ../cake-taste-64/hosts/n64recomp/PINS)" && git submodule update --init --recursive
+git apply ../cake-taste-64/hosts/n64recomp/patches/n64recomp-jtbl-kuseg-alias-and-bounds.diff
+cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo && cmake --build build
+```
+
+Point the profile's `recomp.tools` at `build/N64Recomp` and `build/RSPRecomp`.
+
 ## Usage
 
 ```sh

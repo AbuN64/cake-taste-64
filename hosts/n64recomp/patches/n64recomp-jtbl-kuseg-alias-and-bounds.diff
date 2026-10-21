@@ -1,0 +1,33 @@
+diff --git a/src/analysis.cpp b/src/analysis.cpp
+index 9eaaa30..c2de14b 100644
+--- a/src/analysis.cpp
++++ b/src/analysis.cpp
+@@ -296,6 +296,10 @@ bool N64Recomp::analyze_function(const N64Recomp::Context& context, const N64Rec
+         }
+     }
+ 
++    // Code linked for a TLB-mapped KUSEG alias (0x00xxxxxx) addresses its tables without the KSEG0 bit; fold to the function segment.
++    for (JumpTable& jt : stats.jump_tables) {
++        if ((jt.vram & 0xE0000000) == 0 && (func.vram & 0xE0000000) != 0) jt.vram |= (func.vram & 0xE0000000);
++    }
+     // Sort jump tables by their address
+     std::sort(stats.jump_tables.begin(), stats.jump_tables.end(),
+         [](const JumpTable& a, const JumpTable& b)
+@@ -322,6 +326,9 @@ bool N64Recomp::analyze_function(const N64Recomp::Context& context, const N64Rec
+             // Retrieve the current entry of the jump table
+             // TODO same as above
+             uint32_t rom_addr = vram + func.rom - func.vram;
++            if ((uint64_t)rom_addr + 4 > context.rom.size()) {
++                break; // table lies outside the rom image: not a jump table
++            }
+             uint32_t jtbl_word = byteswap(*reinterpret_cast<const uint32_t*>(&context.rom[rom_addr]));
+ 
+             if (cur_jtbl.got_offset.has_value() && got_ram_addr.has_value()) {
+@@ -330,6 +337,7 @@ bool N64Recomp::analyze_function(const N64Recomp::Context& context, const N64Rec
+                 jtbl_word += got_ram_addr.value();
+             }
+ 
++            if ((jtbl_word & 0xE0000000) == 0 && (func.vram & 0xE0000000) != 0) jtbl_word |= (func.vram & 0xE0000000);
+             // Check if the entry is a valid address in the current function
+             if (jtbl_word < func.vram || jtbl_word >= func.vram + func.words.size() * sizeof(func.words[0])) {
+                 // If it's not then this is the end of the jump table
