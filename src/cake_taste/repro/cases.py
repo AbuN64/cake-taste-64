@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import time
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,30 @@ from .closure import closure, function_vrams, index_bodies, limit_depth, render_
 from .runner import run_command
 
 _RAM_END = 0x80000000
+# Artifact caps (the rig disk filled on 10-23: one run wrote a 790 MB events.txt and a 3.7 GB cases.json). The verdict and the
+# per-case records stay; bulk is bounded. Profile repro keys behave_max_events_mb / behave_max_cache_mb / behave_cache_gb override.
+_MAX_EVENTS_MB = 128  # an events.txt over this fails the run with the advice to lower event_budget or the case count
+_MAX_CACHE_ENTRY_MB = 256  # a cases.json over this is returned for this run but not cached
+_CACHE_GB = 3  # the results/ cache keeps this much, least recently written first out
+
+
+def prune_cache(results: Path, keep: Path, limit_bytes: int) -> int:
+    """Remove the oldest result entries until `results` fits `limit_bytes`; `keep` (the entry just written) stays."""
+    entries = []
+    for entry in results.iterdir():
+        if entry == keep or not entry.is_dir():
+            continue
+        size = sum(f.stat().st_size for f in entry.iterdir() if f.is_file())
+        entries.append((entry.stat().st_mtime, size, entry))
+    total = sum(size for _, size, _ in entries) + sum(f.stat().st_size for f in keep.iterdir() if f.is_file())
+    removed = 0
+    for _, size, entry in sorted(entries, key=lambda e: e[0]):
+        if total <= limit_bytes:
+            break
+        shutil.rmtree(entry, ignore_errors=True)
+        total -= size
+        removed += 1
+    return removed
 _CALLS = ("call", "stub")
 
 
@@ -181,6 +206,7 @@ def cases_text(
 def cases_probe(profile: Any, *, function: str | None, script: Path) -> dict[str, Any]:
     started = time.monotonic()
     config = _config(profile)
+    config_repro = profile.section("repro")
     try:
         request = json.loads(script.read_text())
     except (OSError, ValueError) as exc:
@@ -334,14 +360,37 @@ def cases_probe(profile: Any, *, function: str | None, script: Path) -> dict[str
     run_dir = Path(ran["status"]["run_dir"])
     if ran["status"]["phase"] != "passed":
         raise TasteError("repro.failed", f"behave run failed; receipt: {ran['receipt']}")
-    results = parse_events((run_dir / "events.txt").read_text())
+    events_file = run_dir / "events.txt"
+    max_events = int(config_repro.get("behave_max_events_mb", _MAX_EVENTS_MB)) * 1024 * 1024
+    events_size = events_file.stat().st_size
+    if events_size > max_events:
+        for bulk in (events_file, *run_dir.glob("artifacts/*events.txt")):
+            bulk.unlink(missing_ok=True)
+        raise TasteError(
+            "repro.too_large",
+            f"behave events are {events_size >> 20} MB (cap {max_events >> 20} MB): lower event_budget or split the cases; "
+            f"receipt: {ran['receipt']}",
+        )
+    results = parse_events(events_file.read_text())
+    for bulk in (events_file, *run_dir.glob("artifacts/*events.txt")):  # cases.json holds every event; the raw text is a copy
+        bulk.unlink(missing_ok=True)
     for result, item in zip(results, cases, strict=True):
         result["inputs"] = {k: item[k] for k in ("registers", "stack", "memory", "stub_v0") if k in item}
         if item.get("stub_calls"):
             result["inputs"]["stub_calls"] = len(stub_calls(item, 0))
     probe_dir = run_dir / "probe"
     cases_path = probe_dir / "cases.json"
-    atomic_json(cases_path, results, sort_keys=True)
+    cache_cases = cache / "cases.json" if cache is not None else None
+    cache_ok = cache_cases is not None
+    if cache_cases is not None:  # one copy, in the cache: the run record points there
+        atomic_json(cache_cases, results, sort_keys=True, compact=True)
+        if cache_cases.stat().st_size > int(config_repro.get("behave_max_cache_mb", _MAX_CACHE_ENTRY_MB)) * 1024 * 1024:
+            cache_cases.replace(cases_path)  # too big to keep cached: it lives and dies with the run dir
+            cache_ok = False
+        else:
+            cases_path = cache_cases
+    else:
+        atomic_json(cases_path, results, sort_keys=True, compact=True)
     statuses: dict[str, int] = {}
     for result in results:
         statuses[result["status"]] = statuses.get(result["status"], 0) + 1
@@ -380,9 +429,10 @@ def cases_probe(profile: Any, *, function: str | None, script: Path) -> dict[str
         "differences": None,
     }
     atomic_json(run_dir / "probe.json", record, sort_keys=True)
-    if cache is not None:
-        record = {**record, "cases_path": str(cache / "cases.json")}
-        atomic_json(cache / "cases.json", results, sort_keys=True)
+    if cache is not None and cache_ok:
         atomic_json(cache / "probe.json", record, sort_keys=True)
         atomic_bytes(cache / "receipt.json", Path(ran["receipt"]).read_bytes())
+        prune_cache(cache.parent, cache, int(float(config_repro.get("behave_cache_gb", _CACHE_GB)) * (1 << 30)))
+    elif cache is not None:
+        shutil.rmtree(cache, ignore_errors=True)
     return {"probe": record, "run_id": run_dir.name, "receipt": ran["receipt"]}

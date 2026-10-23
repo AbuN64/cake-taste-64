@@ -38,7 +38,17 @@ def atomic_bytes(path: str | os.PathLike[str], data: bytes) -> None:
 
 
 def atomic_json(
-    path: str | os.PathLike[str], value: Any, *, sort_keys: bool = False, ensure_ascii: bool = False
+    path: str | os.PathLike[str],
+    value: Any,
+    *,
+    sort_keys: bool = False,
+    ensure_ascii: bool = False,
+    compact: bool = False,
 ) -> None:
-    text = json.dumps(value, indent=2, sort_keys=sort_keys, ensure_ascii=ensure_ascii) + "\n"
+    """`compact` drops the indentation: bulk records (a behave cases.json) are 4x smaller and still plain JSON."""
+    text = (
+        json.dumps(value, separators=(",", ":"), sort_keys=sort_keys, ensure_ascii=ensure_ascii)
+        if compact
+        else json.dumps(value, indent=2, sort_keys=sort_keys, ensure_ascii=ensure_ascii)
+    ) + "\n"
     atomic_bytes(path, text.encode("utf-8"))

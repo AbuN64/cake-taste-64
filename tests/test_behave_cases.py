@@ -346,6 +346,23 @@ class FlowTests(unittest.TestCase):
             self.assertEqual(json.loads(Path(again["probe"]["cases_path"]).read_text()), frozen)
 
 
+class CachePruneTests(unittest.TestCase):
+    def test_oldest_entries_go_first_and_the_new_one_stays(self):
+        import os
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            results = Path(tmp)
+            for age, name in enumerate(("old", "mid", "new")):
+                entry = results / name
+                entry.mkdir()
+                (entry / "cases.json").write_bytes(b"x" * 100)
+                os.utime(entry, (1000 + age, 1000 + age))
+            removed = cases.prune_cache(results, results / "new", 150)
+            self.assertEqual((removed, sorted(p.name for p in results.iterdir())), (2, ["new"]))
+            self.assertEqual(cases.prune_cache(results, results / "new", 10), 0)  # the kept entry is never removed
+
+
 class NarrationTests(unittest.TestCase):
     def run_probe(self, narrate):
         from cake_taste.repro import cli
