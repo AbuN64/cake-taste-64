@@ -204,6 +204,18 @@ def cases_text(
     return "\n".join(lines) + "\n"
 
 
+_ECHO_BYTES = 4096  # a patch up to this size is echoed as given; larger ones (a real call state) as address and size
+
+
+def echo_patches(patches: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """A case's memory patches for the results record: small ones as given (behave reads the seeded words of its
+    regions back), large ones, which are megabytes over a real call state's image, as address and size."""
+    return [
+        patch if (size := len(_payload(patch, number))) <= _ECHO_BYTES else {"addr": patch["addr"], "bytes": size}
+        for number, patch in enumerate(patches)
+    ]
+
+
 def cases_probe(profile: Any, *, function: str | None, script: Path) -> dict[str, Any]:
     started = time.monotonic()
     config = _config(profile)
@@ -378,7 +390,9 @@ def cases_probe(profile: Any, *, function: str | None, script: Path) -> dict[str
     for bulk in (events_file, *run_dir.glob("artifacts/*events.txt")):
         bulk.unlink(missing_ok=True)
     for result, item in zip(results, cases, strict=True):
-        result["inputs"] = {k: item[k] for k in ("registers", "stack", "memory", "stub_v0") if k in item}
+        result["inputs"] = {k: item[k] for k in ("registers", "stack", "stub_v0") if k in item}
+        if item.get("memory"):
+            result["inputs"]["memory"] = echo_patches(item["memory"])
         if item.get("stub_calls"):
             result["inputs"]["stub_calls"] = len(stub_calls(item, 0))
     probe_dir = run_dir / "probe"

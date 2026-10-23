@@ -88,6 +88,11 @@ class EventTests(unittest.TestCase):
         self.assertIn("mem 80A00000 00000001", lines)
         self.assertEqual(lines[-1], "go")
 
+    def test_a_results_record_carries_small_patches_and_names_large_ones_by_size(self):
+        small = {"addr": "0x80100000", "hex": "00" * 64}
+        large = {"addr": 0x80200000, "hex": "01" * 8192}
+        self.assertEqual(cases.echo_patches([small, large]), [small, {"addr": 0x80200000, "bytes": 8192}])
+
     def test_each_case_names_what_its_stubs_return(self):
         rows = [{"name": "c0", "stub_v0": {"get": 0x80A01000}}, {"name": "c1"}, {"name": "c2", "stub_v0": {"get": 0}}]
         text = cases.cases_text(rows, {}, 0x80001000, [], 0x80400000, 1500, {"get": 7, "other": 9})
