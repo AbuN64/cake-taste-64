@@ -10,7 +10,7 @@ from typing import Any
 from cake_taste import TasteError
 
 from .bounded import bounded_probe
-from .capture import capture_many, capture_probe
+from .capture import capture_batch, capture_many, capture_probe
 from .cases import cases_probe
 from .narration import MATCH_STATES, narrated_probe, probe_story
 from .probe import KINDS, probe
@@ -38,6 +38,14 @@ def run(profile: Any, argv: tuple[str, ...]) -> dict[str, Any]:
     grab.add_argument("--version", required=True)
     grab.add_argument("--stubs", default="", help="comma-separated callees to record, in call order")
     grab.add_argument("--hit", type=int, default=1, help="which entry to stop at (default: the first)")
+    many = commands.add_parser(
+        "capture-batch",
+        help="capture many functions in ONE oracle boot; each lands in the cache `capture` reads",
+    )
+    many.add_argument("--version", required=True)
+    many.add_argument("--hit", type=int, default=1, help="which entry to stop at (default: the first)")
+    many.add_argument("--plan", required=True, type=Path,
+                      help="JSON list of {function, stubs: [callee, ...]} (the stubs a later `capture` will ask for)")
     shot = commands.add_parser("probe")
     shot.add_argument("--kind", required=True, choices=(*KINDS, "call", "cases"),
                       help="call = bounded closure probe; cases = many cases with an event record")
@@ -59,6 +67,14 @@ def run(profile: Any, argv: tuple[str, ...]) -> dict[str, Any]:
             return capture_many(profile, functions=args.function, version=args.version, hit=args.hit, stubs=stubs,
                                 jobs=args.jobs)
         return capture_probe(profile, function=args.function[0], version=args.version, hit=args.hit, stubs=stubs)
+    if args.action == "capture-batch":
+        try:
+            plan = json.loads(args.plan.read_text())
+        except (OSError, ValueError) as exc:
+            raise TasteError("repro.plan", f"{args.plan}: {exc}") from exc
+        if not isinstance(plan, list) or not all(isinstance(r, dict) and "function" in r for r in plan):
+            raise TasteError("repro.plan", f"{args.plan}: expected a list of {{function, stubs}} objects")
+        return capture_batch(profile, plan=plan, version=args.version, hit=args.hit)
     if args.action == "status":
         config = profile.section("repro")
         path = profile.resolve_path(config["status_path"])

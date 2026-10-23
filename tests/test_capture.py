@@ -308,5 +308,98 @@ class CaptureTests(unittest.TestCase):
             bounded._payload({"addr": 0, "file": str(path), "hex": "00"}, 0)
 
 
+class BatchTests(unittest.TestCase):
+    """capture_batch: one oracle boot for many functions, each stored under the key a single capture reads."""
+
+    fake_run = CaptureTests.fake_run
+    grab = CaptureTests.grab
+
+    def setUp(self):
+        CaptureTests.setUp(self)
+        (self.root / "gen" / "v1" / "symbols.toml").write_text(
+            SYMBOLS.rstrip().removesuffix("]") + '    { name = "other", vram = 0x80002000, size = 0x10 },\n]\n'
+        )
+        self.reaches = {"root", "other"}  # the functions the fake oracle reaches
+        self.batches = []
+
+    def fake_batch(self, profile, *, name, function, command, artifacts=(), env=None, **kw):
+        if "gdb_capture_many.py" not in command[command.index("-x") + 1]:
+            return self.fake_run(profile, name=name, function=function, command=command, artifacts=artifacts, env=env)
+        config = json.loads(Path(env["TASTE_CAPTURE_CONFIG"]).read_text())
+        self.batches.append(config)
+        run_dir = self.root / "batch-runs" / str(len(self.batches))
+        run_dir.mkdir(parents=True)
+        for row in config["targets"]:
+            if row["symbol"] not in self.reaches:
+                continue
+            out = Path(row["out"])
+            image = bytearray(RDRAM)
+            image[0x100:0x104] = b"\x12\x34\x56\x78"
+            (out / "rdram.host").write_bytes(bounded.host_order(bytes(image)))
+            (out / "ctx.bin").write_bytes(context(r4=0x80000100, r29=0x80000800))
+            if row["stubs"]:
+                calls = [{"name": row["stubs"][0], "n": 1, "args": [1, 2, 3, 4], "v0": 7, "v1": 0, "writes": [],
+                          "writes_dropped": False}]
+                (out / "calls.json").write_text(json.dumps({"calls": calls, "complete": True, "unresolved": [],
+                                                            "stubs": row["stubs"]}))
+            (out / "done").write_text("")
+        (run_dir / "output.log").write_text("CAPTURE-DONE root\n")
+        return {"receipt": str(run_dir / "receipt.json"),
+                "status": {"phase": "passed", "run_dir": str(run_dir), "log_path": str(run_dir / "output.log"),
+                           "exit_code": self.exit_code}}
+
+    def batch(self, plan, **kw):
+        with patch.object(capture, "load_recomp", return_value=self.settings), \
+             patch.object(capture, "run_command", side_effect=self.fake_batch):
+            return capture.capture_batch(self.profile, plan=plan, version="v1", **kw)
+
+    def test_one_oracle_run_captures_every_function_under_the_single_capture_key(self):
+        plan = [{"function": "root", "stubs": ["leaf", "alloc"]}, {"function": "0x80002000", "stubs": []}]
+        got = self.batch(plan)
+        self.assertEqual((got["counts"], got["oracle_runs"], len(self.batches)), ({"captured": 2}, 1, 1))
+        self.assertEqual([t["stubs"] for t in self.batches[0]["targets"]], [["alloc", "leaf"], []])
+        self.assertEqual(self.batches[0]["seconds"], 150)
+        again = self.grab(stubs=("alloc", "leaf"))  # the single capture finds the batch's entry
+        self.assertTrue(again["capture"]["cached"])
+        self.assertEqual((again["capture"]["calls"], again["capture"]["calls_complete"]), (1, True))
+        self.assertEqual(Path(again["capture"]["rdram_path"]).read_bytes()[0x100:0x104], b"\x12\x34\x56\x78")
+        self.assertEqual(len(self.runs), 0)  # not one single oracle run
+
+    def test_a_batch_with_everything_cached_does_not_run_the_oracle(self):
+        plan = [{"function": "root", "stubs": []}]
+        self.batch(plan)
+        again = self.batch(plan)
+        self.assertEqual((again["oracle_runs"], len(self.batches), again["captures"][0]["cached"]), (0, 1, True))
+
+    def test_a_function_the_run_never_entered_is_a_kept_miss_and_the_others_still_land(self):
+        self.reaches = {"root"}
+        self.exit_code = 124
+        got = self.batch([{"function": "root", "stubs": []}, {"function": "other", "stubs": []}])
+        self.assertEqual(got["counts"], {"captured": 1, "repro.capture.unreached": 1})
+        with patch.object(capture, "load_recomp", return_value=self.settings), \
+             patch.object(capture, "run_command", side_effect=self.fake_batch), \
+             self.assertRaises(TasteError) as raised:  # a single capture does not run for it again
+            capture.capture_probe(self.profile, function="other", version="v1")
+        self.assertEqual(raised.exception.key, "repro.capture.unreached")
+        self.assertEqual(len(self.runs), 0)
+
+    def test_an_oracle_that_ends_before_some_entry_is_named_and_not_kept(self):
+        self.reaches = {"root"}
+        self.exit_code = 1
+        got = self.batch([{"function": "root", "stubs": []}, {"function": "other", "stubs": []}])
+        self.assertEqual(got["counts"], {"captured": 1, "repro.capture.oracle_exit": 1})
+        self.assertFalse((self.root / "work" / "misses").exists())
+
+    def test_the_batch_script_stops_only_for_events_and_keeps_callee_breakpoints_off_between_traces(self):
+        script = Path(capture.__file__).with_name("gdb_capture_many.py").read_text()
+        self.assertIn('Mark("*" + target.symbol, "entry", target)', script)
+        self.assertIn("self.condition", script)  # gdb filters a return by thread and stack pointer itself
+        self.assertIn("target.entry.enabled = False", script)
+
+    def test_a_plan_row_that_is_no_function_is_its_own_status(self):
+        got = self.batch([{"function": "missing", "stubs": []}, {"function": "root", "stubs": []}])
+        self.assertEqual(got["captures"][0]["status"], "repro.function")
+        self.assertEqual(got["captures"][1]["status"], "captured")
+
 if __name__ == "__main__":
     unittest.main()
