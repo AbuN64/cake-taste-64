@@ -57,6 +57,33 @@ int main(int argc,char**argv){
  __osSiRawStartDma_recomp(ram,&c);assert(c.r2==uint64_t(-1)&&completions==before);
  finish();assert(completions==before+1);__osSiDeviceBusy_recomp(ram,&c);assert(c.r2==0);
  };
+ if(argc>1&&argv[1][0]=='c'){
+ // N64R_CPAK names a card: the slot answers, reads return the file's block, writes land in the file.
+ byte(0)=1;byte(1)=3;byte(6)=0xfe;byte(63)=1;
+ dma(1);dma(0);assert(byte(3)==5&&byte(4)==0&&byte(5)==1);
+ auto crc5=[](unsigned block){
+  unsigned r=0;
+  for(int b=10;b>=-5;--b){unsigned in=b>=0?(block>>b)&1u:0u,top=(r>>4)&1u;r=((r<<1)|in)&0x1fu;if(top)r^=0x15u;}
+  return r;};
+ assert(crc5(0x400)==1); // the well-known accessory control address 0x8001
+ auto field=[&](unsigned block,int bad){
+  unsigned f=(block<<5)|crc5(block);
+  if(bad)f^=1;
+  byte(3)=f>>8;byte(4)=f;};
+ for(int i=0;i<64;++i)byte(i)=0;
+ byte(0)=3;byte(1)=33;byte(2)=2;field(3,0);byte(38)=0xfe;byte(63)=1;
+ dma(1);dma(0);assert(byte(5)==0x60&&byte(36)==0x7f);  // block 3 of the file: bytes 0x60..0x7f, then their CRC
+
+ for(int i=0;i<64;++i)byte(i)=0;
+ byte(0)=3;byte(1)=33;byte(2)=2;field(3,1);byte(38)=0xfe;byte(63)=1;
+ dma(1);dma(0);assert(byte(37)==0xff&&byte(5)==0);  // bad address CRC: nothing returned, CRC inverted
+ for(int i=0;i<64;++i)byte(i)=0;
+ byte(0)=35;byte(1)=1;byte(2)=3;field(7,0);for(int i=0;i<32;++i)byte(5+i)=0xA0+i;byte(38)=0xfe;byte(63)=1;
+ dma(1);dma(0);assert(byte(37)!=0);
+ for(int i=0;i<64;++i)byte(i)=0;
+ byte(0)=3;byte(1)=33;byte(2)=2;field(0x400,0);byte(38)=0xfe;byte(63)=1;
+ dma(1);dma(0);assert(byte(5)==0&&byte(36)==0);  // the accessory area reads zeros
+ return 0;}
  if(argc>1){if(argv[1][0]=='a'){c.r5++;dma(1);}else dma(0);return 1;}
  byte(0)=1;byte(1)=4;byte(2)=1;byte(7)=0xfe;byte(63)=1;
  dma(1);assert(completions==1&&polls==0);
@@ -90,6 +117,17 @@ int main(int argc,char**argv){
             subprocess.run(['c++','-std=c++17','-Wall','-Wextra','-I',str(p),'-I',str(HOST/'probe'),str(HOST/'si_adapter.cpp'),str(p/'mock.cpp'),'-o',str(binary)],check=True,capture_output=True)
             result=subprocess.run([str(binary)],capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stderr)
+            card = p / 'card.mpk'
+            card.write_bytes(bytes(range(256)) * 128)
+            ran = subprocess.run([str(binary), 'card'], capture_output=True, text=True, env={'N64R_CPAK': str(card)})
+            self.assertEqual(ran.returncode, 0, ran.stderr)
+            self.assertEqual(card.read_bytes()[7 * 32 : 8 * 32], bytes(0xA0 + i for i in range(32)))
+            self.assertEqual(card.read_bytes()[: 7 * 32], (bytes(range(256)) * 128)[: 7 * 32])
+            self.assertEqual(len(card.read_bytes()), 0x8000)
+            card.write_bytes(b'short')
+            ran = subprocess.run([str(binary), 'card'], capture_output=True, text=True, env={'N64R_CPAK': str(card)})
+            self.assertEqual(ran.returncode, 4)
+            self.assertIn('N64R_CPAK is not a 32 KiB image', ran.stderr)
             for arg, message in [('read','read without a PIF request'),('align','invalid transfer')]:
                 result=subprocess.run([str(binary),arg],capture_output=True,text=True)
                 self.assertEqual(result.returncode,4)

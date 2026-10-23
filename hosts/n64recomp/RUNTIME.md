@@ -11,7 +11,7 @@ Keyboard snapshots are taken on the SDL window thread. Guest callbacks consume
 those snapshots under a mutex. `minimum_press_ms` preserves quick presses across
 the game's multiple polls (80 ms in this oracle profile); held keys still use
 SDL state. Gamepad hotplug, stick axes, axis-to-button thresholds and buttons
-are profile data. Controller 1 includes keyboard input; Controller Pak is absent.
+are profile data. Controller 1 includes keyboard input; the Controller Pak is absent unless `N64R_CPAK` names a card.
 
 Audio opens SDL's default stereo S16 output; no dummy driver is selected by the
 host. The pinned runtime's always-idle AI status is wrapped with a two-buffer
@@ -315,6 +315,10 @@ unset the host behaves as before. It knows nothing about any game.
 `N64R_PAK` is the Expansion Pak switch (the port's `--pak`), read by the host at every start: `on` or unset is the
 8 MB the runtime reports; `off` makes the guest see the 4 MB console (`osMemSize` at 0x80000318 and `osGetMemSize`),
 so the game takes its no-pak path. Anything else exits 2. A movie's `# pak` header line says which one it ran with.
+`N64R_CPAK` is the Controller Pak (the port's `--cpak`): unset or empty is an empty slot (the game's no-card path); a path
+is a 32 KiB card image (anything else exits 4) that the controller 1 slot answers with, read and written through the
+Joybus accessory packets (address CRC, data CRC) and saved to that file block by block. A movie's `# cpak` header
+line says which card it started with; the TAS tooling hands the oracle its own copy of the port's start card.
 
 Every ROM DMA is a `pi` event: `rom` offset, `ram` physical destination, `len`, `thread`, and `req`,
 the requesters, nearest first. Each level is the thread that sent the message the DMA thread last

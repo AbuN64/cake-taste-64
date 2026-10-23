@@ -2,6 +2,7 @@
 #include <array>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <mutex>
 #include "host_profile.h"
 #include "librecomp/game.hpp"
@@ -37,7 +38,52 @@ uint8_t pak_crc(const uint8_t *bytes) {
     }
     return remainder;
 }
+// The Controller Pak card N64R_CPAK names (a 32 KiB image, as the port's --cpak); unset: nothing in the slot.
+// Packets: read [2, addr_hi, addr_lo] -> 32 bytes + CRC; write [3, addr_hi, addr_lo, 32 bytes] -> CRC. The low five
+// bits of the address field are its CRC; blocks from 0x400 are the accessory area, which a memory card answers
+// with zeros and ignores. A bad address CRC is answered with an inverted data CRC, a failed transfer to the SDK.
+std::array<uint8_t, 0x8000> card{};
+const char *card_path = nullptr;
+void card_open() {
+    static bool done = false;
+    if (done) return;
+    done = true;
+    card_path = std::getenv("N64R_CPAK");
+    if (!card_path || !*card_path) { card_path = nullptr; return; }
+    FILE *file = std::fopen(card_path, "rb");
+    if (!file || std::fread(card.data(), 1, card.size(), file) != card.size() || std::fgetc(file) != EOF)
+        fail("N64R_CPAK is not a 32 KiB image");
+    std::fclose(file);
+}
+uint8_t address_crc(unsigned block) {
+    unsigned reg = 0;
+    for (int bit = 10; bit >= -5; --bit) {
+        unsigned in = bit >= 0 ? (block >> bit) & 1u : 0u, top = (reg >> 4) & 1u;
+        reg = ((reg << 1) | in) & 0x1fu;
+        if (top) reg ^= 0x15u;
+    }
+    return uint8_t(reg);
+}
+void card_packet(uint8_t *command, uint8_t *reply, bool write) {
+    unsigned field = (command[1] << 8) | command[2], block = field >> 5;
+    bool good = address_crc(block) == (field & 0x1f);
+    if (write) {
+        if (good && block < card.size() / 32) {
+            std::memcpy(card.data() + block * 32, command + 3, 32);
+            FILE *file = std::fopen(card_path, "r+b");
+            good = file && std::fseek(file, long(block * 32), SEEK_SET) == 0 &&
+                   std::fwrite(card.data() + block * 32, 1, 32, file) == 32;
+            if (file) good = std::fclose(file) == 0 && good;
+        }
+        reply[0] = uint8_t(pak_crc(command + 3) ^ (good ? 0 : 0xff));
+    } else {
+        std::memset(reply, 0, 32);
+        if (good && block < card.size() / 32) std::memcpy(reply, card.data() + block * 32, 32);
+        reply[32] = uint8_t(pak_crc(reply) ^ (good ? 0 : 0xff));
+    }
+}
 unsigned execute() {
+    card_open();
     pif = request;
     if (pif[63] != 1) fail("unsupported PIF control byte");
     auto input = host_input_callbacks();
@@ -62,7 +108,7 @@ unsigned execute() {
         } else if (command == 0 || command == 0xff) {
             if (tx != 1 || rx != 3) fail("invalid controller status packet");
             pif[result] = 5; pif[result + 1] = 0;
-            pif[result + 2] = device.connected_pak == ultramodern::input::Pak::None ? 2 : 1;
+            pif[result + 2] = card_path || device.connected_pak != ultramodern::input::Pak::None ? 1 : 2;
         } else if (command == 1) {
             if (tx != 1 || rx != 4) fail("invalid controller read packet");
             uint16_t buttons = 0; float x = 0, y = 0; int8_t sx = 0, sy = 0;
@@ -73,6 +119,12 @@ unsigned execute() {
             }
             pif[result] = buttons >> 8; pif[result + 1] = buttons;
             pif[result + 2] = uint8_t(sx); pif[result + 3] = uint8_t(sy);
+        } else if (command == 2 && card_path) {
+            if (tx != 3 || rx != 33) fail("invalid accessory read packet");
+            card_packet(&pif[pos + 2], &pif[result], false);
+        } else if (command == 3 && card_path) {
+            if (tx != 35 || rx != 1) fail("invalid accessory write packet");
+            card_packet(&pif[pos + 2], &pif[result], true);
         } else if ((command == 2 || command == 3) && device.connected_pak == ultramodern::input::Pak::None) {
             // A connected controller answers even when its accessory is absent.
             // The inverted data CRC triggers the SDK's status-query/error path.
