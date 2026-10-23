@@ -18,6 +18,13 @@ from .runner import run_command
 from .scenario import scenario
 
 
+def _env(pairs: list[str]) -> dict[str, str]:
+    bad = [p for p in pairs if "=" not in p]
+    if bad:
+        raise TasteError("repro.request", f"--env takes NAME=VALUE, not {bad[0]}")
+    return dict(p.split("=", 1) for p in pairs)
+
+
 def run(profile: Any, argv: tuple[str, ...]) -> dict[str, Any]:
     parser = argparse.ArgumentParser(prog="taste repro")
     commands = parser.add_subparsers(dest="action", required=True)
@@ -38,6 +45,9 @@ def run(profile: Any, argv: tuple[str, ...]) -> dict[str, Any]:
     grab.add_argument("--version", required=True)
     grab.add_argument("--stubs", default="", help="comma-separated callees to record, in call order")
     grab.add_argument("--hit", type=int, default=1, help="which entry to stop at (default: the first)")
+    grab.add_argument("--env", action="append", default=[], metavar="NAME=VALUE",
+                      help="this run's own host variables over the profile's (the movie that reaches the function)")
+    grab.add_argument("--seconds", type=int, help="this run's time limit, never below the profile's")
     many = commands.add_parser(
         "capture-batch",
         help="capture many functions in ONE oracle boot; each lands in the cache `capture` reads",
@@ -65,8 +75,9 @@ def run(profile: Any, argv: tuple[str, ...]) -> dict[str, Any]:
         stubs = tuple(n for n in args.stubs.split(",") if n)
         if len(args.function) > 1:
             return capture_many(profile, functions=args.function, version=args.version, hit=args.hit, stubs=stubs,
-                                jobs=args.jobs)
-        return capture_probe(profile, function=args.function[0], version=args.version, hit=args.hit, stubs=stubs)
+                                jobs=args.jobs, env=_env(args.env), seconds=args.seconds)
+        return capture_probe(profile, function=args.function[0], version=args.version, hit=args.hit, stubs=stubs,
+                             env=_env(args.env), seconds=args.seconds)
     if args.action == "capture-batch":
         try:
             plan = json.loads(args.plan.read_text())

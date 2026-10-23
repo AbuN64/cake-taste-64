@@ -241,7 +241,8 @@ class _Setup:
     """What every capture of one version shares: the profile's capture settings, the symbol table, the ROM, the
     host binary (known to be built from the current inputs) and the gdb script's text."""
 
-    def __init__(self, profile: Any, version: str) -> None:
+    def __init__(self, profile: Any, version: str, env: dict[str, str] | None = None,
+                 seconds: int | None = None) -> None:
         self.profile = profile
         self.version = version
         self.config = _config(profile)
@@ -257,9 +258,12 @@ class _Setup:
         self.rom = self.settings.rom(version)
         self.rom_sha1 = hashlib.sha1(self.rom.read_bytes()).hexdigest()
         self.built = ensure_host(profile, self.config, self.settings, version)
-        self.seconds = int(self.config.get("timeout_seconds", 120))
+        self.seconds = max(int(self.config.get("timeout_seconds", 120)), int(seconds or 0))
         self.work = profile.resolve_path(self.config["work_root"])
-        self.env = {str(k): str(v) for k, v in self.config.get("env", {}).items()}
+        # a run of its own (a movie that reaches the function) overrides the profile's fixed input; the env is in
+        # every key, so each movie is its own capture
+        self.env = {**{str(k): str(v) for k, v in self.config.get("env", {}).items()},
+                    **{str(k): str(v) for k, v in (env or {}).items()}}
 
     def target(self, function: str) -> str:
         return resolve_target(function, self.vrams)
@@ -331,13 +335,16 @@ class _Setup:
 
 
 def capture_probe(
-    profile: Any, *, function: str, version: str, hit: int = 1, stubs: tuple[str, ...] = ()
+    profile: Any, *, function: str, version: str, hit: int = 1, stubs: tuple[str, ...] = (),
+    env: dict[str, str] | None = None, seconds: int | None = None,
 ) -> dict[str, Any]:
+    """`env` and `seconds` are this capture's own run (the movie that reaches the function and how long it needs):
+    they replace the profile's fixed input and raise its time limit, and they are part of the capture's key."""
     started = time.monotonic()
     names = sorted(set(stubs))
     if hit < 1:
         raise TasteError("repro.capture", "--hit counts from 1")
-    setup = _Setup(profile, version)
+    setup = _Setup(profile, version, env, seconds)
     config, env = setup.config, setup.env
     target = setup.target(function)
     host, seconds = setup.built["host"], setup.seconds
@@ -402,6 +409,34 @@ def gdb_batch_config(targets: list[dict[str, Any]], hit: int, rdram_size: int, s
 def capture_batch(
     profile: Any, *, plan: list[dict[str, Any]], version: str, hit: int = 1
 ) -> dict[str, Any]:
+    """Rows that name their own run (`env`, `seconds`: a movie that reaches the function) are captured one oracle
+    boot per distinct run, the others share the profile's run; the rows come back in plan order."""
+    started = time.monotonic()
+    groups: dict[str, list[int]] = {}
+    for index, item in enumerate(plan):
+        own = json.dumps([item.get("env") or {}, item.get("seconds") or 0], sort_keys=True)
+        groups.setdefault(own, []).append(index)
+    ordered: list[dict[str, Any]] = [{}] * len(plan)
+    counts: dict[str, int] = {}
+    runs, receipt = 0, ""
+    for name, indexes in groups.items():
+        env, seconds = json.loads(name)
+        got = _capture_group(profile, plan=[plan[i] for i in indexes], version=version, hit=hit, env=env,
+                             seconds=seconds or None)
+        for i, row in zip(indexes, got["captures"], strict=True):
+            ordered[i] = row
+        runs += got["oracle_runs"]
+        receipt = got["receipt"] or receipt
+    for row in ordered:
+        counts[row["status"]] = counts.get(row["status"], 0) + 1
+    return {"captures": ordered, "counts": counts, "oracle_runs": runs, "receipt": receipt,
+            "wall_seconds": round(time.monotonic() - started, 3)}
+
+
+def _capture_group(
+    profile: Any, *, plan: list[dict[str, Any]], version: str, hit: int = 1, env: dict[str, str] | None = None,
+    seconds: int | None = None,
+) -> dict[str, Any]:
     """Capture many functions in ONE oracle boot. `plan` rows are {function, stubs}; each ends with exactly the
     capture (same key, same files) `capture_probe` would have made for that function and stub set, so a later
     single capture is a cache hit, or with its named finding (`repro.capture.unreached` for one the run never
@@ -413,9 +448,9 @@ def capture_batch(
     started = time.monotonic()
     if hit < 1:
         raise TasteError("repro.capture", "--hit counts from 1")
-    setup = _Setup(profile, version)
+    setup = _Setup(profile, version, env, seconds)
     config, env = setup.config, setup.env
-    seconds = int(config.get("batch_seconds", max(150, setup.seconds)))
+    seconds = max(int(config.get("batch_seconds", max(150, setup.seconds))), setup.seconds)
     setup.seconds = seconds
     script_source = Path(__file__).with_name("gdb_capture_many.py").read_bytes()
     # the single capture's script keys the entries, so one cache serves both
@@ -505,7 +540,7 @@ def capture_batch(
 
 def capture_many(
     profile: Any, *, functions: list[str], version: str, hit: int = 1, stubs: tuple[str, ...] = (),
-    jobs: int | None = None,
+    jobs: int | None = None, env: dict[str, str] | None = None, seconds: int | None = None,
 ) -> dict[str, Any]:
     """Capture several functions, `jobs` oracle runs at a time (default: the profile's `jobs`; the slot locks bound
     the total over every process). Each function ends captured or with its named finding."""
@@ -514,7 +549,8 @@ def capture_many(
 
     def one(function: str) -> dict[str, Any]:
         try:
-            got = capture_probe(profile, function=function, version=version, hit=hit, stubs=stubs)
+            got = capture_probe(profile, function=function, version=version, hit=hit, stubs=stubs, env=env,
+                                seconds=seconds)
         except TasteError as exc:
             return {"function": function, "status": exc.key, "message": exc.detail}
         shown = got["capture"]

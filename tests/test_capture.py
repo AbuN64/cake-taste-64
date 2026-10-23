@@ -403,3 +403,21 @@ class BatchTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_a_movie_run_is_its_own_capture_with_its_env_and_a_longer_limit(self):
+        play = {"N64R_TAS_PLAY": "/m/a.raw"}
+        first = self.grab(env=play, seconds=400)
+        other = self.grab()
+        self.assertNotEqual(first["capture"]["key"], other["capture"]["key"])
+        self.assertEqual(self.runs[0][1]["N64R_TAS_PLAY"], "/m/a.raw")
+        self.assertEqual(self.runs[0][0][3], "400")  # timeout -s INT 400 gdb ...
+        self.assertTrue(self.grab(env=play, seconds=400)["capture"]["cached"])
+
+    def test_batch_rows_with_their_own_run_boot_the_oracle_once_per_run_and_come_back_in_order(self):
+        plan = [{"function": "root", "stubs": [], "env": {"N64R_TAS_PLAY": "/m/a.raw"}, "seconds": 300},
+                {"function": "0x80002000", "stubs": []},
+                {"function": "0x80002000", "stubs": [], "env": {"N64R_TAS_PLAY": "/m/a.raw"}, "seconds": 300}]
+        got = self.batch(plan)
+        self.assertEqual((got["oracle_runs"], len(self.batches), got["counts"]), (2, 2, {"captured": 3}))
+        self.assertEqual([r["function"] for r in got["captures"]], ["root", "0x80002000", "0x80002000"])
+        self.assertEqual(sorted(b["seconds"] for b in self.batches), [150, 300])
