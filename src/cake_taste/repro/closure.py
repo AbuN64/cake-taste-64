@@ -38,18 +38,36 @@ def function_vrams(symbols: Path) -> dict[str, int]:
 
 
 def index_bodies(funcs_dir: Path) -> dict[str, str]:
-    """Name -> full generated definition text, for every function in the generated C files."""
+    """Name -> full generated definition text, for every function in the generated C files.
+
+    A definition runs from its header to the next header (or the end of the file) and closes at the last `;}` line
+    in that span, so a body that itself holds a `;}` line is not cut short. A span without one is output N64Recomp
+    left half written; the error then names the generator's own refusal from its log when there is one."""
     bodies: dict[str, str] = {}
     for path in sorted(funcs_dir.glob("*.c")):
         text = path.read_text()
-        for match in _HEADER.finditer(text):
-            stop = text.find(_END, match.end())
+        headers = list(_HEADER.finditer(text))
+        for number, match in enumerate(headers):
+            limit = headers[number + 1].start() if number + 1 < len(headers) else len(text)
+            stop = text.rfind(_END, match.end() - 1, limit)
             if stop < 0:
-                raise TasteError("repro.generated", f"{path}: {match.group(1)} has no closing ';}}'")
+                raise TasteError(
+                    "repro.generated", f"{path}: {match.group(1)} has no closing ';}}'{_refusal(funcs_dir)}"
+                )
             bodies[match.group(1)] = text[match.start() : stop + len(_END)]
     if not bodies:
         raise TasteError("repro.generated", f"no generated functions under {funcs_dir}")
     return bodies
+
+
+def _refusal(funcs_dir: Path) -> str:
+    """The generator's own error lines, from the `n64recomp.log` beside the funcs directory, as a message suffix."""
+    try:
+        lines = (funcs_dir.parent / "n64recomp.log").read_text().splitlines()
+    except OSError:
+        return ""
+    errors = [ln.strip() for ln in lines if "error" in ln.lower() or "no function found" in ln.lower()]
+    return f" (N64Recomp: {' | '.join(errors[-3:])})" if errors else ""
 
 
 @dataclass

@@ -1,7 +1,10 @@
+import tempfile
 import unittest
+from pathlib import Path
 
+from cake_taste import TasteError
 from cake_taste.recomp import candidate
-from cake_taste.repro import cases
+from cake_taste.repro import cases, closure
 
 
 class HarnessInputTests(unittest.TestCase):
