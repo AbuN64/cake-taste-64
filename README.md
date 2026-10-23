@@ -25,16 +25,17 @@ cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo && cmake --build build
 
 Point the profile's `recomp.tools` at `build/N64Recomp` and `build/RSPRecomp`.
 
-The host (`hosts/n64recomp`) also builds against N64ModernRuntime and RT64 at their pins, each with its patch, and runs headless on Mesa software Vulkan:
+The host (`hosts/n64recomp`) also builds against N64ModernRuntime and RT64 at their pins, each with its patches, and
+runs headless (SDL's offscreen video driver: no window, RT64 on a Vulkan headless surface; Mesa RADV or lavapipe):
 
 ```sh
-sudo apt install cmake ninja-build gcc-14 g++-14 xvfb mesa-vulkan-drivers ffmpeg
-for r in N64ModernRuntime rt64; do git clone https://github.com/$( [ $r = rt64 ] && echo rt64 || echo N64Recomp )/$r && (cd $r && git checkout "$(awk -v r=$r '$1==r{print $2}' ../cake-taste-64/hosts/n64recomp/PINS)" && git submodule update --init --recursive); done
-git -C N64ModernRuntime apply ../cake-taste-64/hosts/n64recomp/patches/n64modernruntime-{thread-queue-remove,virtual-time}.diff
-git -C rt64 apply ../cake-taste-64/hosts/n64recomp/patches/rt64-acclaim-f3dex2-registration.diff
+sudo apt install cmake ninja-build gcc-14 g++-14 mesa-vulkan-drivers ffmpeg
+cake-taste-64/hosts/n64recomp/deps.sh ~/src/oracle-deps   # pinned checkouts with every patch applied
 ```
 
-Configure with the `N64R_*` inputs in `hosts/n64recomp/CMakeLists.txt`, then point `repro.capture` (`host`, `host_build`, `display_command` starting `Xvfb :N`, `env` with `DISPLAY`, `VK_ICD_FILENAMES=.../lvp_icd.json`, `N64R_ROM`) at it.
+Configure with the `N64R_*` inputs in `hosts/n64recomp/CMakeLists.txt` (`-DN64R_RUNTIME_SRC=~/src/oracle-deps/N64ModernRuntime
+-DN64R_RT64_SRC=~/src/oracle-deps/rt64`), then point `repro.capture` (`host`, `host_build`, `env` with
+`SDL_VIDEODRIVER=offscreen`, `N64R_ROM`) at it. No display server is needed; an X11 `DISPLAY` is refused.
 
 ## Usage
 

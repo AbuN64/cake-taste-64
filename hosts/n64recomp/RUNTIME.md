@@ -309,8 +309,8 @@ unset the host behaves as before. It knows nothing about any game.
   replaces channel 0 poll by poll, so both replays are keyed to the guest's own
   polls. `N64R_TAS_SHOT_EVERY` (N) checkpoints `poll-<n>` every N polls;
   `N64R_TAS_TRACE` (file) writes "poll vi" per controller poll, the same line the port's `N64C_TAS_TRACE` writes.
-  `N64R_TAS_EXIT_AFTER` (N) quits N polls after the movie ends. Needs
-  `N64R_GOLDEN_DIR`.
+  `N64R_TAS_EXIT_AFTER` (N) quits N polls after the movie ends. The movie replays
+  without `N64R_GOLDEN_DIR` too (then only the pictures below are written).
 
 `N64R_PAK` is the Expansion Pak switch (the port's `--pak`), read by the host at every start: `on` or unset is the
 8 MB the runtime reports; `off` makes the guest see the 4 MB console (`osMemSize` at 0x80000318 and `osGetMemSize`),
@@ -325,8 +325,32 @@ show up behind it. Empty `req` means no send was paired.
 `N64R_TRACE` lines now carry the VI retrace count in the frame column.
 A `quit` step flushes every file and ends the process with status 0 without runtime
 teardown, which races the running guest threads.
-Recordings are not bit-reproducible after boot: the audio thread is wall-paced
-and threads interleave, so compare structure, not bytes.
+Recordings under the default CPU-time clock are not bit-reproducible after boot (guest time follows
+measured CPU work), so compare structure, not bytes; `N64R_CLOCK` `entries` (below) makes them reproducible.
+
+## Headless pictures and the deterministic clock (TAS oracle)
+The TAS page compares the native port with this oracle poll by poll, so the oracle speaks the port's frame protocol
+under `N64R_` names and runs with no display server (no X11, no Wayland compositor):
+- Headless: with SDL's `offscreen` or `dummy` video driver (`SDL_VIDEODRIVER`) the host creates no window and RT64
+  presents to a `VK_EXT_headless_surface` swap chain (`patches/rt64-headless-surface.diff`; headless WSI has no
+  present wait, so presents are not tagged or waited on), at the original resolution and rate. Mesa's RADV and
+  lavapipe both provide the extension. `deps.sh DEST` checks out N64ModernRuntime and RT64 at `PINS` with every patch
+  applied, for `-DN64R_RUNTIME_SRC` / `-DN64R_RT64_SRC`.
+- `N64R_VIEW` (`view.cpp`): the picture on screen as a 320x240 24-bit BMP, replaced whole (written beside it, then
+  renamed) at most `N64R_VIEW_FPS` (1..120, default 15) times a second of wall time and once more at a TAS exit, the
+  same file the port's `N64C_VIEW` writes. `N64R_TAS_SHOT_DIR` with `N64R_TAS_SHOT_EVERY`: `poll-NNNNNN.ppm`
+  (320x240 binary PPM, never replacing a file) at every Nth controller poll, as the port's `N64C_TAS_SHOT_DIR`; the
+  guest thread waits for it, so the picture is that poll's at any host speed. Both work without `N64R_GOLDEN_DIR`.
+- The picture is the colour image the VI shows (`osViGetCurrentFramebuffer`) after every submitted graphics task has
+  rendered: RT64's render target for that address converted to the RDP's own pixel format (no dither), or guest RDRAM
+  when the CPU drew it, scaled bilinearly to 320x240 like the port's pictures. Width and format come from the VI
+  registers, the height from the rows the game drew into that colour image (else the VI's estimate).
+- `N64R_CLOCK`: `entries` makes guest time a fixed `HOST_GUEST_NS_PER_ENTRY` per tick (a function entry, a spin loop's
+  1024th pass, an interrupt restore), derived from the same CPU calibration (`cpu_profile.py`), instead of measured
+  thread CPU time; the AI then plays queued samples in guest time too. Guest timing no longer depends on the host,
+  so the same movie gives the same pictures and the same poll/VI trace every run (`cpu` or unset: the CPU-time
+  clock above). Measured on the rig (16 cores, RADV): `pak-continue-legal` 2591 polls / 3611 VIs in 2.85 s wall,
+  two runs byte-identical in all 103 shots and the trace.
 
 ## Lockstep recorder
 `lockstep.cpp` is a test instrument for comparing a native port's boot with this

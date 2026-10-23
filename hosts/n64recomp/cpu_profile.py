@@ -43,7 +43,15 @@ def render(facts: dict) -> str:
         or not 1 <= scale <= 1024
     ):
         raise ValueError("derived CPU scale must be a finite number in 1..1024")
-    return f"#pragma once\n#define HOST_NATIVE_CPU_SCALE {float(scale)!r}\n"
+    return (f"#pragma once\n#define HOST_NATIVE_CPU_SCALE {float(scale)!r}\n"
+            f"#define HOST_GUEST_NS_PER_ENTRY {guest_ns_per_entry(cpu['calibration'], cpu['timing'])!r}\n")
+
+
+def guest_ns_per_entry(calibration: dict, timing: dict) -> float:
+    """Guest nanoseconds per workload unit under the same calibration: the deterministic clock (N64R_CLOCK=entries)
+    charges this per function entry instead of measured native CPU time."""
+    window = calibration["window"]
+    return float(window["vi"] * 1e9 / timing["vi_hz"] / window["entries"])
 
 
 if __name__ == "__main__":

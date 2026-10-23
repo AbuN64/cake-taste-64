@@ -1,0 +1,105 @@
+diff --git a/src/hle/rt64_application_window.cpp b/src/hle/rt64_application_window.cpp
+index 07ef521..60af867 100755
+--- a/src/hle/rt64_application_window.cpp
++++ b/src/hle/rt64_application_window.cpp
+@@ -267,6 +267,10 @@ namespace RT64 {
+             refreshRate++;
+         }
+ #   elif defined(RT64_SDL_WINDOW_VULKAN)
++        if (windowHandle == nullptr) {
++            // Headless: no display to ask; keep the default rate.
++            return;
++        }
+         int displayIndex = SDL_GetWindowDisplayIndex(windowHandle);
+         if (displayIndex < 0) {
+             fprintf(stderr, "SDL_GetWindowDisplayIndex failed. Error: %s.\n", SDL_GetError());
+diff --git a/src/vulkan/rt64_vulkan.cpp b/src/vulkan/rt64_vulkan.cpp
+index c814269..216a5fe 100644
+--- a/src/vulkan/rt64_vulkan.cpp
++++ b/src/vulkan/rt64_vulkan.cpp
+@@ -1945,10 +1945,24 @@ namespace RT64 {
+         }
+ #   elif defined(RT64_SDL_WINDOW_VULKAN)
+         VulkanInterface *renderInterface = commandQueue->device->renderInterface;
+-        SDL_bool sdlRes = SDL_Vulkan_CreateSurface(renderWindow, renderInterface->instance, &surface);
+-        if (sdlRes == SDL_FALSE) {
+-            fprintf(stderr, "SDL_Vulkan_CreateSurface failed with error %s.\n", SDL_GetError());
+-            return;
++        if (renderWindow == nullptr) {
++            // No window: present to a headless surface (VK_EXT_headless_surface), so rendering needs no display server.
++            // Headless WSI has no present wait, so presents are neither tagged with ids nor waited on.
++            headless = true;
++            VkHeadlessSurfaceCreateInfoEXT headlessInfo = {};
++            headlessInfo.sType = VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT;
++            res = vkCreateHeadlessSurfaceEXT(renderInterface->instance, &headlessInfo, nullptr, &surface);
++            if (res != VK_SUCCESS) {
++                fprintf(stderr, "vkCreateHeadlessSurfaceEXT failed with error code 0x%X.\n", res);
++                return;
++            }
++        }
++        else {
++            SDL_bool sdlRes = SDL_Vulkan_CreateSurface(renderWindow, renderInterface->instance, &surface);
++            if (sdlRes == SDL_FALSE) {
++                fprintf(stderr, "SDL_Vulkan_CreateSurface failed with error %s.\n", SDL_GetError());
++                return;
++            }
+         }
+ #   elif defined(__ANDROID__)
+         assert(renderWindow != nullptr);
+@@ -2114,7 +2128,7 @@ namespace RT64 {
+         presentInfo.waitSemaphoreCount = uint32_t(waitSemaphoresVector.size());
+ 
+         VkPresentIdKHR presentId = {};
+-        if (commandQueue->device->capabilities.presentWait) {
++        if (commandQueue->device->capabilities.presentWait && !headless) {
+             currentPresentId++;
+             presentId.sType = VK_STRUCTURE_TYPE_PRESENT_ID_KHR;
+             presentId.pPresentIds = &currentPresentId;
+@@ -2145,7 +2159,7 @@ namespace RT64 {
+ 
+     void VulkanSwapChain::wait() {
+         constexpr uint64_t MaxFrameDelay = 1;
+-        if (commandQueue->device->capabilities.presentWait && (currentPresentId > MaxFrameDelay)) {
++        if (commandQueue->device->capabilities.presentWait && !headless && (currentPresentId > MaxFrameDelay)) {
+             constexpr uint64_t waitTimeout = 100000000;
+             vkWaitForPresentKHR(commandQueue->device->vk, vk, currentPresentId - MaxFrameDelay, waitTimeout);
+         }
+@@ -2295,7 +2309,14 @@ namespace RT64 {
+         dstWidth = rect.right - rect.left;
+         dstHeight = rect.bottom - rect.top;
+ #   elif defined(RT64_SDL_WINDOW_VULKAN)
+-        SDL_GetWindowSize(renderWindow, (int *)(&dstWidth), (int *)(&dstHeight));
++        if (renderWindow == nullptr) {
++            // Headless surface: a fixed 4:3 size.
++            dstWidth = 640;
++            dstHeight = 480;
++        }
++        else {
++            SDL_GetWindowSize(renderWindow, (int *)(&dstWidth), (int *)(&dstHeight));
++        }
+ #   elif defined(__ANDROID__)
+         dstWidth = ANativeWindow_getWidth(renderWindow);
+         dstHeight = ANativeWindow_getHeight(renderWindow);
+@@ -4118,6 +4139,10 @@ namespace RT64 {
+                 }
+             }
+         }
++        else {
++            // No window: swap chains present to a headless surface.
++            requiredExtensions.insert(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME);
++        }
+ #   endif
+ 
+         std::unordered_set<std::string> missingRequiredExtensions = requiredExtensions;
+diff --git a/src/vulkan/rt64_vulkan.h b/src/vulkan/rt64_vulkan.h
+index 293a580..1e2af50 100644
+--- a/src/vulkan/rt64_vulkan.h
++++ b/src/vulkan/rt64_vulkan.h
+@@ -203,6 +203,7 @@ namespace RT64 {
+     };
+ 
+     struct VulkanSwapChain : RenderSwapChain {
++        bool headless = false;
+         VkSwapchainKHR vk = VK_NULL_HANDLE;
+         VulkanCommandQueue *commandQueue = nullptr;
+         VkSurfaceKHR surface = VK_NULL_HANDLE;

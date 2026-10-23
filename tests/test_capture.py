@@ -233,6 +233,16 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual(raised.exception.key, "repro.capture.display")
         self.assertEqual(self.runs, [])
 
+    def test_an_x11_display_is_refused_and_headless_needs_none(self):
+        self.config["env"] = {"DISPLAY": ":144"}
+        with self.assertRaises(TasteError) as raised:
+            self.grab()
+        self.assertEqual(raised.exception.key, "repro.capture.display")
+        self.assertIn("never X11", str(raised.exception))
+        self.config["env"] = {"SDL_VIDEODRIVER": "offscreen"}
+        self.grab()
+        self.assertEqual(len(self.runs), 1)
+
     def test_a_display_command_brings_up_the_socket_before_the_oracle_runs(self):
         runtime = self.root / "rt"
         self.config["env"] = {"WAYLAND_DISPLAY": "wayland-9", "XDG_RUNTIME_DIR": str(runtime)}

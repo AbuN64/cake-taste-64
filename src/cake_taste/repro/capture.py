@@ -189,11 +189,13 @@ def ensure_host(profile: Any, config: dict[str, Any], settings: Any, version: st
 def _display(profile: Any, config: dict[str, Any], env: dict[str, str]) -> None:
     """A Wayland display the oracle can open: the socket named by the run environment, started with
     `display_command` when it is not there (one start over every process). A capture never opens windows on a
-    display it was not given."""
+    display it was not given. Without one the host runs headless (SDL_VIDEODRIVER=offscreen: no window, RT64 on a
+    Vulkan headless surface), which needs no display at all. X11 is never used."""
+    if env.get("DISPLAY"):
+        raise TasteError("repro.capture.display", "repro.capture.env names an X11 DISPLAY; the oracle runs headless "
+                         "(SDL_VIDEODRIVER=offscreen) or on Wayland, never X11")
     if "WAYLAND_DISPLAY" in env and "XDG_RUNTIME_DIR" in env:
         socket = Path(env["XDG_RUNTIME_DIR"]) / env["WAYLAND_DISPLAY"]
-    elif env.get("DISPLAY", "").startswith(":"):  # an X server (Xvfb) by display number
-        socket = Path("/tmp/.X11-unix") / f"X{env['DISPLAY'][1:].split('.')[0]}"
     else:
         return
     if socket.exists():
@@ -212,7 +214,7 @@ def _display(profile: Any, config: dict[str, Any], env: dict[str, str]) -> None:
             with (root / "display.log").open("a") as log:
                 subprocess.Popen([str(c) for c in command], stdout=log, stderr=subprocess.STDOUT,
                                  stdin=subprocess.DEVNULL, start_new_session=True,
-                                 env={**os.environ, **{k: env[k] for k in ("XDG_RUNTIME_DIR", "DISPLAY") if k in env}})
+                                 env={**os.environ, **{k: env[k] for k in ("XDG_RUNTIME_DIR",) if k in env}})
             deadline = time.monotonic() + 15
             while not socket.exists() and time.monotonic() < deadline:
                 time.sleep(0.2)

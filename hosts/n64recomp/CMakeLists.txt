@@ -44,6 +44,8 @@ n64host_require_runtime_patch("${_rt_src}"
   "${CMAKE_CURRENT_SOURCE_DIR}/patches/n64modernruntime-thread-queue-remove.diff")
 n64host_require_runtime_patch("${_rt_src}"
   "${CMAKE_CURRENT_SOURCE_DIR}/patches/n64modernruntime-virtual-time.diff" "virtual time")
+n64host_require_runtime_patch("${_rt64_src}"
+  "${CMAKE_CURRENT_SOURCE_DIR}/patches/rt64-headless-surface.diff" "RT64 headless surface")
 
 # Functions N64Recomp refused or ignored have no body; give them logging stubs so the rest links
 # (weak: a runtime that implements the same name, such as osGetCount, wins).
@@ -111,7 +113,7 @@ add_subdirectory(${_rt64_src} rt64)
 
 file(GLOB GEN_FUNCS CONFIGURE_DEPENDS ${N64R_GEN_DIR}/funcs/*.c)
 add_executable(n64host
-  tlb.c golden.cpp lockstep.cpp fault_adapter.cpp main.cpp render_rt64.cpp audio_sdl.cpp input_sdl.cpp libultra_gaps.c init_adapter.c addrmap.c cop0_adapter.c pi_adapter.cpp vi_adapter.cpp tlb_adapter.c si_adapter.cpp si_timing.cpp queue_trace.cpp cpu_scheduler.cpp cpu_clock.cpp cpu_metrics.cpp
+  tlb.c golden.cpp lockstep.cpp fault_adapter.cpp main.cpp render_rt64.cpp audio_sdl.cpp input_sdl.cpp libultra_gaps.c init_adapter.c addrmap.c cop0_adapter.c pi_adapter.cpp vi_adapter.cpp tlb_adapter.c si_adapter.cpp si_timing.cpp queue_trace.cpp cpu_scheduler.cpp cpu_clock.cpp cpu_metrics.cpp view.cpp
   ${CMAKE_BINARY_DIR}/gen/refused_stubs.c
   ${GEN_FUNCS} ${N64R_GEN_DIR}/rsp/rsp_audio.cpp)
 set_source_files_properties(${GEN_FUNCS} PROPERTIES COMPILE_OPTIONS "-w;-O1")

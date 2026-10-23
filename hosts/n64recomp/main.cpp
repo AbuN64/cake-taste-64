@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <unistd.h>
 #include <vector>
 #include "host.h"
 #include "cpu_metrics.h"
@@ -30,6 +31,7 @@ extern "C" void n64host_golden_finish();
 extern "C" uint64_t n64host_golden_frame();
 extern "C" void n64host_golden_entry(const char *, unsigned);
 extern "C" void n64host_golden_audio(uint32_t, uint32_t, uint32_t);
+extern "C" void n64host_view_vi();
 extern "C" void n64host_trace(const char *name) {
     host_cpu_metrics.entry();
     n64host_cpu_tick();
@@ -56,7 +58,14 @@ void *create_gfx() {
     }
     return nullptr;
 }
+// SDL's offscreen and dummy video drivers have no display: RT64 then renders to a headless Vulkan surface and
+// pictures come out as files (view.cpp). No X11 or Wayland server is involved.
+bool headless() {
+    const char *driver = SDL_GetCurrentVideoDriver();
+    return driver && (std::strcmp(driver, "offscreen") == 0 || std::strcmp(driver, "dummy") == 0);
+}
 ultramodern::renderer::WindowHandle create_window(void *) {
+    if (headless()) return {};
     g_window = SDL_CreateWindow("n64host", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 960, 540,
                                 SDL_WINDOW_RESIZABLE | SDL_WINDOW_VULKAN);
     if (!g_window) {
@@ -80,7 +89,7 @@ RspUcodeFunc *get_ucode(const OSTask *task) {
 }
 void message_box(const char *msg) { std::fprintf(stderr, "n64host: %s\n", msg); }
 std::string thread_name(const OSThread *) { return {}; }
-void vi_cb() { host_cpu_vi(osGetCount()); n64host_golden_vi(); }
+void vi_cb() { host_cpu_vi(osGetCount()); n64host_golden_vi(); n64host_view_vi(); }
 void gfx_init_cb() {}
 
 recomp_func_t *find_func(uint32_t vram) {
@@ -171,7 +180,16 @@ int main(int argc, char **argv) {
     // Install the configured original ROM where load_stored_rom expects it; hash is checked there.
     std::filesystem::path cdir = cfgdir ? cfgdir : ".";
     std::filesystem::create_directories(cdir);
-    std::filesystem::copy_file(rom_path, cdir / g.stored_filename(), std::filesystem::copy_options::overwrite_existing);
+    // Runs may share one config folder: replace the stored ROM only when it differs, and atomically.
+    const auto stored = cdir / g.stored_filename();
+    std::ifstream stored_in(stored, std::ios::binary);
+    const std::vector<uint8_t> stored_rom((std::istreambuf_iterator<char>(stored_in)), {});
+    if (stored_rom != rom) {
+        auto partial = stored;
+        partial += "." + std::to_string(getpid());
+        std::filesystem::copy_file(rom_path, partial, std::filesystem::copy_options::overwrite_existing);
+        std::filesystem::rename(partial, stored);
+    }
 
     std::printf("%s\n", host_controls);
     std::fflush(stdout);

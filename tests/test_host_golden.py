@@ -35,5 +35,20 @@ class GoldenDocsTest(unittest.TestCase):
         quit_step = source[source.index("void quit(uint64_t now)"):]
         self.assertLess(quit_step.index('write_trace("final")'), quit_step.index("std::_Exit(0)"))
         self.assertIn("without runtime\nteardown", (HOST / "RUNTIME.md").read_text(encoding="utf-8"))
+class ViewDocsTest(unittest.TestCase):
+    def test_every_view_env_var_is_documented(self):
+        source = (HOST / "view.cpp").read_text(encoding="utf-8")
+        names = set(re.findall(r"getenv\(\"(N64R_[A-Z_]+)\"\)", source))
+        self.assertEqual(names, {"N64R_VIEW", "N64R_VIEW_FPS", "N64R_TAS_SHOT_DIR"})
+        docs = (HOST / "RUNTIME.md").read_text(encoding="utf-8")
+        for name in names | {"N64R_CLOCK"}:
+            self.assertIn(f"`{name}`", docs)
+
+    def test_shots_never_replace_and_the_view_is_renamed_whole(self):
+        source = (HOST / "view.cpp").read_text(encoding="utf-8")
+        self.assertIn('"wbx"', source)
+        self.assertIn("std::rename(view.tmp.c_str(), view.path.c_str())", source)
+
+
 if __name__ == "__main__":
     unittest.main()

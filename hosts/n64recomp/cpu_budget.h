@@ -18,6 +18,13 @@ struct HostCpuBudget {
         remainder_ns -= double(whole);
         return whole;
     }
+    // The deterministic clock: one workload unit of `ns` guest nanoseconds, the fraction carried.
+    uint64_t charge_entry(double ns) {
+        remainder_ns += ns;
+        const uint64_t whole = uint64_t(remainder_ns);
+        remainder_ns -= double(whole);
+        return whole;
+    }
     uint32_t disable_interrupts() {
         const uint32_t previous = interrupts_enabled;
         interrupts_enabled = false;
