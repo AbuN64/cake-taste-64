@@ -312,6 +312,10 @@ unset the host behaves as before. It knows nothing about any game.
   `N64R_TAS_EXIT_AFTER` (N) quits N polls after the movie ends. Needs
   `N64R_GOLDEN_DIR`.
 
+`N64R_PAK` is the Expansion Pak switch (the port's `--pak`), read by the host at every start: `on` or unset is the
+8 MB the runtime reports; `off` makes the guest see the 4 MB console (`osMemSize` at 0x80000318 and `osGetMemSize`),
+so the game takes its no-pak path. Anything else exits 2. A movie's `# pak` header line says which one it ran with.
+
 Every ROM DMA is a `pi` event: `rom` offset, `ram` physical destination, `len`, `thread`, and `req`,
 the requesters, nearest first. Each level is the thread that sent the message the DMA thread last
 received (`thread`) and the last functions it entered before that send (`fns`, oldest first). The next

@@ -123,7 +123,7 @@ set_source_files_properties(${N64R_GEN_DIR}/rsp/rsp_audio.cpp PROPERTIES COMPILE
 find_package(SDL2 REQUIRED)
 target_link_libraries(n64host PRIVATE librecomp ultramodern rt64 ${SDL2_LIBRARIES})
 target_compile_definitions(n64host PRIVATE HLSL_CPU FFX_GCC RT64_SDL_WINDOW_VULKAN IMGUI_IMPL_VULKAN_NO_PROTOTYPES)
-target_link_options(n64host PRIVATE -Wl,--wrap=osInitialize_recomp -Wl,--wrap=__osInitialize_common_recomp
+target_link_options(n64host PRIVATE -Wl,--wrap=osInitialize_recomp -Wl,--wrap=__osInitialize_common_recomp -Wl,--wrap=osGetMemSize_recomp
   -Wl,--wrap=osUnmapTLBAll_recomp -Wl,--wrap=cop0_status_write
   -Wl,--wrap=osSetEventMesg_recomp -Wl,--wrap=osPiRawStartDma_recomp
   -Wl,--wrap=osCreateViManager_recomp
