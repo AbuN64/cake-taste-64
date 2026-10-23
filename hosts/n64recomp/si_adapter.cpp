@@ -13,7 +13,7 @@
 ultramodern::input::callbacks_t host_input_callbacks();
 void host_si_schedule(void (*)(), uint64_t);
 void convert_to_n64_range(float, float, int8_t&, int8_t&);
-extern "C" bool n64host_golden_pad(uint16_t *buttons, int8_t *x, int8_t *y);
+extern "C" bool n64host_golden_pad(unsigned channel, uint16_t *buttons, int8_t *x, int8_t *y);
 namespace {
 std::mutex si_mutex;
 std::array<uint8_t, 64> request{}, pif{};
@@ -112,7 +112,7 @@ unsigned execute() {
         } else if (command == 1) {
             if (tx != 1 || rx != 4) fail("invalid controller read packet");
             uint16_t buttons = 0; float x = 0, y = 0; int8_t sx = 0, sy = 0;
-            if (channel != 0 || !n64host_golden_pad(&buttons, &sx, &sy)) {
+            if (!n64host_golden_pad(channel, &buttons, &sx, &sy)) {
                 if (input.poll_input) input.poll_input();
                 if (!input.get_input(channel, &buttons, &x, &y)) pif[pos + 1] |= 0x80;
                 convert_to_n64_range(x, y, sx, sy);

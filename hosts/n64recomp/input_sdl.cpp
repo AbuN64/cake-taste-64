@@ -7,6 +7,7 @@
 #include <mutex>
 #include "ultramodern/input.hpp"
 #include "host_input_profile.h"
+extern "C" unsigned n64host_golden_pads();
 namespace {
 SDL_GameController *pad = nullptr;
 std::mutex input_mutex;
@@ -60,7 +61,7 @@ bool get(int n, uint16_t *b, float *x, float *y) {
 void rumble(int, bool) {}
 ultramodern::input::connected_device_info_t info(int n) {
     using namespace ultramodern::input;
-    return {n==0 ? Device::Controller : Device::None, Pak::None};
+    return {n>=0 && unsigned(n)<n64host_golden_pads() ? Device::Controller : Device::None, Pak::None};
 }
 }
 void n64host_input_init() { init(); }

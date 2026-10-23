@@ -3,6 +3,7 @@
 //   N64R_GOLDEN_DIR   output directory (events.jsonl, dl-*.bin, acmd-all.bin, pcm-all.s16, trace-*.tsv)
 //   N64R_SCRIPT       lines "<vi> key <Name>", "<vi> checkpoint <name>", "<vi> quit" (vi = retrace count)
 //   N64R_SHOT_CMD     shell template run at a checkpoint; "%s" is replaced by the PNG path
+//   N64R_PADS         controllers the guest sees (1..4, default 1): a movie line holds that many triples
 //   N64R_TAS_PLAY     raw controller movie, one "BUTTONS X Y" line per guest controller poll (hex buttons), the
 //                     same file a native port replays (works without N64R_GOLDEN_DIR); N64R_TAS_SHOT_EVERY=N
 //                     checkpoints "poll-<n>" every N polls (with the golden dir) and writes the picture there
@@ -161,15 +162,32 @@ extern "C" void n64host_golden_vi() {
 
 extern "C" uint64_t n64host_golden_frame() { return vi_count.load(); }
 
-// Called by the SI adapter for each controller read of channel 0. Returns true when a movie supplies the pad, so a
-// replay is keyed to the guest's own polls exactly as the port keys it.
-extern "C" bool n64host_golden_pad(uint16_t *buttons, int8_t *x, int8_t *y) {
+// N64R_PADS: controllers the guest sees (1..4, default 1); a movie line holds that many "BUTTONS X Y" triples.
+extern "C" unsigned n64host_golden_pads() {
+    static const unsigned pads = [] {
+        const char *p = std::getenv("N64R_PADS");
+        long n = p && *p ? std::strtol(p, nullptr, 10) : 1;
+        if (n < 1 || n > 4) { std::fprintf(stderr, "n64host: N64R_PADS is 1..4, got %s\n", p); std::_Exit(5); }
+        return unsigned(n);
+    }();
+    return pads;
+}
+
+// Called by the SI adapter for each controller read of every channel. Returns true when a movie supplies the pad, so
+// a replay is keyed to the guest's own polls exactly as the port keys it: channel 0's read advances the movie by one
+// line, the other channels of that poll read the same line.
+extern "C" bool n64host_golden_pad(unsigned channel, uint16_t *buttons, int8_t *x, int8_t *y) {
     if (!movie) return false;
+    static uint16_t held[4];
+    static int8_t held_x[4], held_y[4];
+    if (channel >= n64host_golden_pads()) return false;
+    if (channel) {
+        *buttons = held[channel]; *x = held_x[channel]; *y = held_y[channel];
+        return true;
+    }
     std::unique_lock g(lock);
-    char line[64];
-    unsigned b = 0;
-    int sx = 0, sy = 0;
-    *buttons = 0; *x = *y = 0;
+    char line[256];
+    for (unsigned i = 0; i < 4; i++) { held[i] = 0; held_x[i] = held_y[i] = 0; }
     while (!movie_done) {
         if (!std::fgets(line, sizeof line, movie)) {
             movie_done = true;
@@ -177,14 +195,21 @@ extern "C" bool n64host_golden_pad(uint16_t *buttons, int8_t *x, int8_t *y) {
             break;
         }
         if (line[0] == '#' || line[0] == '\n') continue;
-        if (std::sscanf(line, "%x %d %d", &b, &sx, &sy) != 3) {
-            std::fprintf(stderr, "n64host: bad movie line after poll %llu: %s", (unsigned long long)played, line);
-            std::_Exit(5);
+        const char *at = line;
+        for (unsigned i = 0; i < n64host_golden_pads(); i++) {
+            unsigned b = 0;
+            int sx = 0, sy = 0, used = 0;
+            if (std::sscanf(at, "%x %d %d%n", &b, &sx, &sy, &used) != 3) {
+                std::fprintf(stderr, "n64host: bad movie line after poll %llu (%u pads): %s", (unsigned long long)played, n64host_golden_pads(), line);
+                std::_Exit(5);
+            }
+            at += used;
+            held[i] = uint16_t(b); held_x[i] = int8_t(sx); held_y[i] = int8_t(sy);
         }
-        *buttons = uint16_t(b); *x = int8_t(sx); *y = int8_t(sy);
         ++played;
         break;
     }
+    *buttons = held[0]; *x = held_x[0]; *y = held_y[0];
     ++polls;
     if (const char *t = std::getenv("N64R_TAS_TRACE")) { static FILE *tf = std::fopen(t, "w"); if (tf) { std::fprintf(tf, "%llu %llu\n", (unsigned long long)polls, (unsigned long long)vi_count.load()); std::fflush(tf); } }
     const bool shot = shot_every && polls % shot_every == 0;

@@ -94,6 +94,7 @@ int16_t SDL_GameControllerGetAxis(SDL_GameController*,int n){return axes[n];}
 Uint8 SDL_GameControllerGetButton(SDL_GameController*,int n){return buttons[n];}
 void n64host_update_input();
 void n64host_input_event(const SDL_Event&);
+extern "C" unsigned n64host_golden_pads() { return 1; }
 ultramodern::input::callbacks_t host_input_callbacks();
 int main(){
  auto cb=host_input_callbacks();uint16_t b;float x,y;

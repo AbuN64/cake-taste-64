@@ -311,6 +311,8 @@ unset the host behaves as before. It knows nothing about any game.
   `N64R_TAS_TRACE` (file) writes "poll vi" per controller poll, the same line the port's `N64C_TAS_TRACE` writes.
   `N64R_TAS_EXIT_AFTER` (N) quits N polls after the movie ends. The movie replays
   without `N64R_GOLDEN_DIR` too (then only the pictures below are written).
+- `N64R_PADS` (1..4, default 1): controllers the guest sees. A movie line then holds that many `BUTTONS X Y` triples
+  (pad 1 first), and channel 0's read of a poll advances the movie for every channel; the port's `N64C_PADS` is the twin.
 
 `N64R_PAK` is the Expansion Pak switch (the port's `--pak`), read by the host at every start: `on` or unset is the
 8 MB the runtime reports; `off` makes the guest see the 4 MB console (`osMemSize` at 0x80000318 and `osGetMemSize`),
