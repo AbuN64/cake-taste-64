@@ -377,6 +377,21 @@ hands it each function entry (name, a0-a3, f12, f14, sp) and return (v0, v1, f0)
 Returns pair with entries by name and stack pointer; frames left above a return
 (tail calls) are dropped. The port's own tool does the comparison.
 
+## Function-replay recorder
+`replay.cpp` is a test instrument for `decomp behave --replay`, off unless `N64R_REPLAY_DIR` is set. It samples a few
+real calls of every function the run reaches and writes `replay.jsonl`: per call the arguments (`a`, `f12`, `f14`,
+8 `stack` words), every guest location the call and its callees read before writing (`in`: address, width 1/2/4/8,
+value as the generated code saw it) and stored (`out`, last value), and the return (`ret`, `f0`). While a sampled call
+runs, the accessors in `probe/addrmap.h` go through the recorder; otherwise they are the plain translation plus one
+thread-local test. A call is written off (`skip`: `interleaved` another thread ran meanwhile, `frames` a retrace passed,
+`non-ram`, `unaligned`, `mixed-width` one location read at two widths, `events`) when its memory was not its own.
+- `N64R_REPLAY_DIR`: output directory (created).
+- `N64R_REPLAY_CALLS`: kept samples per function (default 3).
+- `N64R_REPLAY_GAP`: VI retraces between two samples of one function (default 25); samples also differ in a0-a3.
+- `N64R_REPLAY_EVENTS`: accesses one call may make (default 200000).
+- `N64R_REPLAY_RAM`: RDRAM bytes (default 0x800000).
+The recorder only reads: guest time (`N64R_CLOCK=entries`) and the run are unchanged.
+
 ## Generation facts for a new game
 - `recomp.symbol_names[version]` maps a vram to a runtime name. A value is the name, or
   `{"name", "source"}` so the evidence travels with the fact. Every name must have a `<name>_recomp`

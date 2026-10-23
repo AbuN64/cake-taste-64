@@ -9,6 +9,10 @@ extern "C" {
 void n64host_trace(const char *name);
 void n64host_cpu_tick(void);
 extern int n64host_lockstep_on;
+extern int n64host_replay_on;
+void n64host_replay_entry(const char *name, const uint8_t *rdram, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3,
+                          uint64_t f12, uint64_t f14, uint32_t sp);
+void n64host_replay_return(const char *name, const uint8_t *rdram, uint32_t v0, uint32_t v1, uint64_t f0, uint32_t sp);
 void n64host_lockstep_entry(const char *name, const uint8_t *rdram, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3,
                             uint64_t f12, uint64_t f14, uint32_t sp);
 void n64host_lockstep_return(const char *name, const uint8_t *rdram, uint32_t v0, uint32_t v1, uint64_t f0, uint32_t sp);
@@ -17,8 +21,12 @@ void n64host_lockstep_return(const char *name, const uint8_t *rdram, uint32_t v0
 #endif
 #define TRACE_ENTRY() n64host_trace(__func__); \
     if (n64host_lockstep_on) n64host_lockstep_entry(__func__, rdram, (uint32_t)ctx->r4, (uint32_t)ctx->r5, \
+        (uint32_t)ctx->r6, (uint32_t)ctx->r7, ctx->f12.u64, ctx->f14.u64, (uint32_t)ctx->r29); \
+    if (n64host_replay_on) n64host_replay_entry(__func__, rdram, (uint32_t)ctx->r4, (uint32_t)ctx->r5, \
         (uint32_t)ctx->r6, (uint32_t)ctx->r7, ctx->f12.u64, ctx->f14.u64, (uint32_t)ctx->r29);
 #define TRACE_RETURN() \
+    if (n64host_replay_on) n64host_replay_return(__func__, rdram, (uint32_t)ctx->r2, (uint32_t)ctx->r3, \
+        ctx->f0.u64, (uint32_t)ctx->r29); \
     if (n64host_lockstep_on) n64host_lockstep_return(__func__, rdram, (uint32_t)ctx->r2, (uint32_t)ctx->r3, \
         ctx->f0.u64, (uint32_t)ctx->r29);
 // Backward branch: a guest spin-wait never reaches a function entry, so service interrupts every 1024th pass.

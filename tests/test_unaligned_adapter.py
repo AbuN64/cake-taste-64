@@ -14,6 +14,7 @@ class UnalignedTests(unittest.TestCase):
 #include <stdint.h>
 #include <assert.h>
 typedef uint64_t gpr;
+__thread int n64host_rec_active; void n64host_replay_taint(const char *why) { (void)why; }
 static uint8_t backing[32]; static unsigned translated, invoked;
 static uint32_t wanted_address; static gpr wanted_reg;
 uint8_t *n64host_ptr(uint8_t *ram, uint64_t va) {
