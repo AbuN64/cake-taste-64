@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <deque>
 #include <mutex>
+#include <string>
 #include "librecomp/game.hpp"
 #include "ultramodern/ultramodern.hpp"
 extern "C" void n64host_golden_pcm(const int16_t *, size_t);
@@ -19,6 +20,35 @@ std::mutex audio_mutex;
 // FIFO the game sees never depends on how fast the host consumes sound. Guest nanoseconds each buffer ends at.
 std::deque<uint64_t> guest_ends;
 uint64_t guest_end = 0;
+// N64R_AUDIO_OUT=<path>: every queued block appended as raw s16 stereo (the port's N64C_AUDIO_OUT layout); <path>.rate
+// holds "<rate>\n", replaced whole when the game sets the frequency. No wall-time cap: the oracle runs in guest time,
+// so the file holds all the sound of the run at whatever speed it replays.
+std::FILE *tap;
+bool tap_open;
+std::string tap_path;
+void tap_init() {
+    if (tap_open) return;
+    tap_open = true;
+    const char *path = std::getenv("N64R_AUDIO_OUT");
+    if (!path || !*path) return;
+    tap_path = path;
+    tap = std::fopen(path, "ab");
+    if (!tap) std::fprintf(stderr, "n64host: cannot write N64R_AUDIO_OUT %s\n", path);
+}
+void tap_rate(uint32_t f) {
+    tap_init();
+    if (!tap) return;
+    const std::string tmp = tap_path + ".rate.tmp";
+    std::FILE *r = std::fopen(tmp.c_str(), "w");
+    if (!r) return;
+    std::fprintf(r, "%u\n", f);
+    std::fclose(r);
+    std::rename(tmp.c_str(), (tap_path + ".rate").c_str());
+}
+void tap_write(const int16_t *s, size_t n) {
+    tap_init();
+    if (tap && (std::fwrite(s, sizeof *s, n, tap) != n || std::fflush(tap))) { std::fclose(tap); tap = nullptr; }
+}
 [[noreturn]] void fail(const char *operation) {
     std::fprintf(stderr, "n64host: audio %s failed: %s\n", operation, SDL_GetError());
     std::_Exit(3);
@@ -36,6 +66,7 @@ void open_dev() {
 }
 void queue(int16_t *s, size_t n) {
     n64host_golden_pcm(s, n);
+    tap_write(s, n);
     std::lock_guard lock(audio_mutex);
     if (!dev) open_dev();
     if (n > UINT32_MAX / sizeof(int16_t) || SDL_QueueAudio(dev, s, Uint32(n * sizeof(int16_t))) != 0)
@@ -73,7 +104,7 @@ uint32_t status() {
     while (!buffer_ends.empty() && buffer_ends.front() <= consumed) buffer_ends.pop_front();
     return (pending ? 0x40000000u : 0) | (buffer_ends.size() >= 2 ? 0x80000000u : 0);
 }
-void set_freq(uint32_t f) { n64host_golden_rate(f); std::lock_guard lock(audio_mutex); rate = f; open_dev(); }
+void set_freq(uint32_t f) { n64host_golden_rate(f); tap_rate(f); std::lock_guard lock(audio_mutex); rate = f; open_dev(); }
 }
 ultramodern::audio_callbacks_t host_audio_callbacks() { return {queue, remaining, set_freq}; }
 

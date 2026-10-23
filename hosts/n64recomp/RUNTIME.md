@@ -341,6 +341,9 @@ under `N64R_` names and runs with no display server (no X11, no Wayland composit
   same file the port's `N64C_VIEW` writes. `N64R_TAS_SHOT_DIR` with `N64R_TAS_SHOT_EVERY`: `poll-NNNNNN.ppm`
   (320x240 binary PPM, never replacing a file) at every Nth controller poll, as the port's `N64C_TAS_SHOT_DIR`; the
   guest thread waits for it, so the picture is that poll's at any host speed. Both work without `N64R_GOLDEN_DIR`.
+- `N64R_AUDIO_OUT` (`audio_sdl.cpp`): the sound the game queues, appended as raw 16-bit stereo to that file, and
+  `<file>.rate` holding the game's `osAiSetFrequency` rate (replaced whole); the port's `N64C_AUDIO_OUT` layout, so one
+  reader plays either. Every block is written (no wall-time cap), at any host speed.
 - The picture is the colour image the VI shows (`osViGetCurrentFramebuffer`) after every submitted graphics task has
   rendered: RT64's render target for that address converted to the RDP's own pixel format (no dither), or guest RDRAM
   when the CPU drew it, scaled bilinearly to 320x240 like the port's pictures. Width and format come from the VI

@@ -90,7 +90,11 @@ vnow=125000;__wrap_osAiGetStatus_recomp(nullptr,&ctx);assert(ctx.r2==0&&cb.remai
                 check=True,
                 capture_output=True,
             )
-            subprocess.run([str(binary)], check=True, capture_output=True)
+            tap = p / "tap.pcm"
+            subprocess.run([str(binary)], check=True, capture_output=True, env={"N64R_AUDIO_OUT": str(tap)})
+            # N64R_AUDIO_OUT: every queued block (four of 4 samples), and the last frequency the game set.
+            self.assertEqual(tap.stat().st_size, 4 * 4 * 2)
+            self.assertEqual((p / "tap.pcm.rate").read_text(), "32000\n")
             result = subprocess.run([str(binary), "fail"], capture_output=True, text=True)
             self.assertEqual(result.returncode, 3)
             self.assertIn("open default device failed", result.stderr)
