@@ -39,8 +39,9 @@ from .closure import closure, function_vrams, index_bodies, limit_depth, render_
 from .runner import run_command
 
 _RAM_END = 0x80000000
-# Artifact caps (the rig disk filled on 10-23: one run wrote a 790 MB events.txt and a 3.7 GB cases.json). The verdict and the
-# per-case records stay; bulk is bounded. Profile repro keys behave_max_events_mb / behave_max_cache_mb / behave_cache_gb override.
+# Artifact caps (the rig disk filled on 10-23: one run wrote a 790 MB events.txt and a 3.7 GB cases.json). The verdict
+# and the per-case records stay; bulk is bounded. Profile repro keys behave_max_events_mb / behave_max_cache_mb /
+# behave_cache_gb override.
 _MAX_EVENTS_MB = 128  # an events.txt over this fails the run with the advice to lower event_budget or the case count
 _MAX_CACHE_ENTRY_MB = 256  # a cases.json over this is returned for this run but not cached
 _CACHE_GB = 3  # the results/ cache keeps this much, least recently written first out
@@ -368,11 +369,13 @@ def cases_probe(profile: Any, *, function: str | None, script: Path) -> dict[str
             bulk.unlink(missing_ok=True)
         raise TasteError(
             "repro.too_large",
-            f"behave events are {events_size >> 20} MB (cap {max_events >> 20} MB): lower event_budget or split the cases; "
+            f"behave events are {events_size >> 20} MB (cap {max_events >> 20} MB): lower event_budget or split the "
+            f"cases; "
             f"receipt: {ran['receipt']}",
         )
     results = parse_events(events_file.read_text())
-    for bulk in (events_file, *run_dir.glob("artifacts/*events.txt")):  # cases.json holds every event; the raw text is a copy
+    # cases.json holds every event; the raw text is a copy
+    for bulk in (events_file, *run_dir.glob("artifacts/*events.txt")):
         bulk.unlink(missing_ok=True)
     for result, item in zip(results, cases, strict=True):
         result["inputs"] = {k: item[k] for k in ("registers", "stack", "memory", "stub_v0") if k in item}

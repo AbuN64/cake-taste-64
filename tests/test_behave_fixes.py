@@ -43,3 +43,42 @@ class StubSectionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GeneratedBodyExtentTests(unittest.TestCase):
+    """index_bodies on shapes taken from real N64Recomp output."""
+
+    HEADER = "RECOMP_FUNC void {}(uint8_t* rdram, recomp_context* ctx) {{\n"
+
+    def index(self, text, log=None):
+        with tempfile.TemporaryDirectory() as tmp:
+            funcs = Path(tmp) / "funcs"
+            funcs.mkdir()
+            (funcs / "funcs_0.c").write_text(text)
+            if log is not None:
+                (Path(tmp) / "n64recomp.log").write_text(log)
+            return closure.index_bodies(funcs)
+
+    def test_each_body_stops_at_its_own_closing_line(self):
+        first = self.HEADER.format("a") + "    ctx->r2 = 1;\n;}\n"
+        second = self.HEADER.format("b") + "    a(rdram, ctx);\n;}\n"
+        got = self.index('#include "recomp.h"\n' + first + "\n" + second)
+        self.assertEqual(got, {"a": first, "b": second})
+
+    def test_a_closing_line_inside_a_body_does_not_cut_it_short(self):
+        body = self.HEADER.format("a") + "    if (x) {\n;}\n    ctx->r2 = 1;\n;}\n"
+        self.assertEqual(self.index(body)["a"], body)
+
+    def test_half_written_output_is_refused_with_the_generators_reason(self):
+        text = self.HEADER.format("behave_f") + "    // 0x808009B0: addiu $sp, $sp, -0x60\n    if (x) {\n"
+        log = "Function count: 4374\nNo function found for jal target: 0x802C5910\nError recompiling behave_f\n"
+        with self.assertRaises(TasteError) as raised:
+            self.index(text, log)
+        message = str(raised.exception)
+        self.assertIn("behave_f has no closing ';}'", message)
+        self.assertIn("No function found for jal target: 0x802C5910", message)
+
+    def test_a_half_written_last_body_is_refused_after_complete_ones(self):
+        text = self.HEADER.format("a") + "\n;}\n\n" + self.HEADER.format("b") + "    x;\n"
+        with self.assertRaises(TasteError):
+            self.index(text)
