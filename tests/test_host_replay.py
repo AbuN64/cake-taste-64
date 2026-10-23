@@ -91,8 +91,9 @@ class ReplayRecorderTest(unittest.TestCase):
     def test_one_shape_per_location(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp)
-            source = DRIVER.replace("    uint8_t b = MEM_BU(1, 0x80001000);\n    uint16_t hw = MEM_HU(2, 0x80001000);\n",
-                                    "    uint8_t b = MEM_BU(1, 0x80001020);\n    uint16_t hw = MEM_HU(2, 0x80001020);\n")
+            source = DRIVER.replace(
+                "    uint8_t b = MEM_BU(1, 0x80001000);\n    uint16_t hw = MEM_HU(2, 0x80001000);\n",
+                "    uint8_t b = MEM_BU(1, 0x80001020);\n    uint16_t hw = MEM_HU(2, 0x80001020);\n")
             (path / "driver.cpp").write_text(source)
             exe = path / "driver"
             subprocess.run(["g++", "-std=c++17", "-O1", "-Wall", "-Werror", "-I", str(HOST / "probe"),
@@ -113,7 +114,8 @@ class ReplayRecorderTest(unittest.TestCase):
             # the call's own store is an output, not an input; the read after it is not an input
             self.assertIn([base + 0x1004, 4, 0x11223345], f["out"])
             self.assertNotIn(0x1004 + base, [r[0] for r in f["in"]])
-            self.assertEqual((f["a"], f["sp"], f["ret"], f["f0"]), ([7, 8, 9, 10], 0x80003F00, [0x11223345, 0], 0x3FF0000000000000))
+            self.assertEqual((f["a"], f["sp"], f["ret"], f["f0"]),
+                             ([7, 8, 9, 10], 0x80003F00, [0x11223345, 0], 0x3FF0000000000000))
             self.assertEqual(g["depth"], 1)
             self.assertIn([base + 0x2008, 8, 0x0102030405060708], g["out"])
             self.assertIn([base + 0x2008, 8, 0x0102030405060708], f["out"])   # recorded in the outer call too

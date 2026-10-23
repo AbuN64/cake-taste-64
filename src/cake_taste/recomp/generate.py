@@ -50,7 +50,8 @@ def build(settings: Settings, version: str,
     rom = settings.rom(version)
     size = rom.stat().st_size if rom.is_file() else None
     sections, counts = build_sections(layout, settings.elf_path(version), settings.symbols_path(version), size,
-                                       settings.names_for(version), settings.sizes_for(version), statics)
+                                       settings.names_for(version), settings.sizes_for(version), statics,
+                                       rom.read_bytes() if size is not None else None)
     return layout, sections, counts
 
 

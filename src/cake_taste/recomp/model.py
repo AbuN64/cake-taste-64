@@ -9,6 +9,7 @@ from pathlib import Path
 from cake_taste import TasteError
 
 from .asmfuncs import Function, read_elf_functions, read_function_addresses, read_symbol_names
+from .entries import code_pointers
 from .splat import Layout, Segment
 
 
@@ -30,6 +31,7 @@ def build_sections(
     overrides: dict[int, str] | None = None,
     sizes: dict[int, int] | None = None,
     statics: dict[int, str] | None = None,
+    rom: bytes | None = None,
 ) -> tuple[list[Section], dict[str, int]]:
     names = {**read_symbol_names(symbols_file), **(overrides or {})}
     ordered = sorted(layout.segments, key=lambda s: s.start)
@@ -71,6 +73,14 @@ def build_sections(
             _add_static(layout, spans, grouped, symbols_file, vram, (overrides or {}).get(vram, f"asm_{vram:08X}"))
     for vram, name in sorted((statics or {}).items()):
         _add_static(layout, spans, grouped, symbols_file, vram, (overrides or {}).get(vram, name))
+    if rom is not None:
+        # Entries the game reaches through stored pointers but no `jal` names: see entries.py.
+        for vram, (at, inside, end) in sorted(code_pointers(layout, spans, grouped, rom).items()):
+            owner = next(s for s, size in spans
+                         if s.vram is not None and s.vram <= vram < s.vram + size and grouped[s.name])
+            grouped[owner.name].append(Function((overrides or {}).get(vram, f"entry_{vram:08X}"),
+                                                owner.start + vram - owner.vram, vram, end - vram,
+                                                f"code pointer at rom 0x{at:X}, inside {inside}"))
     if unused_sizes:
         raise TasteError("recomp.sections", f"function_sizes addresses absent from functions: {sorted(unused_sizes)}")
     sections = [
