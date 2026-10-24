@@ -79,6 +79,7 @@ class Target:
         self.symbol, self.out, self.stubs = row["symbol"], Path(row["out"]), row["stubs"]
         self.entry = None
         self.entries = 0
+        self.hit = int(row.get("hit", cfg["hit"]))
         self.entered = False
         self.finished = False
         self.thread = None
@@ -120,7 +121,7 @@ class Mark(gdb.Breakpoint):
             if self.kind == "entry":
                 stops["entry"] += 1
                 target.entries += 1
-                if target.entered or target.entries != cfg["hit"]:
+                if target.entered or target.entries != target.hit:
                     return False
                 target.entered = True  # a recursive or other-thread entry is not an event of this call
             else:

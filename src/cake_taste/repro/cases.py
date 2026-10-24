@@ -311,6 +311,8 @@ def cases_probe(profile: Any, *, function: str | None, script: Path) -> dict[str
     timeout_ms = int(float(request.get("timeout_seconds", 2)) * 1000)
     event_budget = int(request["event_budget"]) if request.get("event_budget") else None
     lenient = bool(request.get("lenient"))
+    if lenient and not str(request.get("lenient_reason") or "").strip():
+        raise TasteError("repro.lenient_reason", "lenient memory requires an explicit nonempty reason")
     frame = (sp - window, sp + 0x10)
     cases_file = cases_text(cases, regs_base, entry, seeded, sp, timeout_ms, stub_v0, event_budget, lenient, frame)
 
@@ -452,6 +454,7 @@ def cases_probe(profile: Any, *, function: str | None, script: Path) -> dict[str
         "cases": len(results),
         "event_budget": event_budget,
         "lenient": bool(request.get("lenient")),
+        "lenient_reason": request.get("lenient_reason") if request.get("lenient") else None,
         "events_max": max((r.get("events_written", 0) for r in results), default=0),
         "statuses": statuses,
         "fpu_exceptions": fpu_exceptions,

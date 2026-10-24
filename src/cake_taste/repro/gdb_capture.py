@@ -114,6 +114,7 @@ def main():
     if cfg["stubs"]:
         done = Mark(f"*{struct.unpack('<Q', read(rsp, 8))[0]}", internal=True)
         done.thread = thread
+        done.condition = f"$rsp == {rsp + 8}"
         leave, floor = struct.unpack("<Q", read(rsp, 8))[0], rsp + 8
         stubs = {}
         for name in cfg["stubs"]:
@@ -147,6 +148,7 @@ def main():
                 inside = {"name": name, "ctx": here, "back": back, "floor": sp + 8, "args": args,
                           "before": read(rdram, SIZE), "stop": Mark(f"*{back}", internal=True)}
                 inside["stop"].thread = thread
+                inside["stop"].condition = f"$rsp == {sp + 8}"
             elif inside is not None and pc == inside["back"] and sp == inside["floor"]:
                 v0, v1 = struct.unpack("<2Q", read(inside["ctx"] + 16, 16))
                 writes, dropped = word_diff(inside["before"], read(rdram, SIZE), rdram, cfg["max_writes"])

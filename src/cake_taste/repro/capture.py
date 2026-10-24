@@ -46,7 +46,7 @@ from .runner import run_command
 
 _CTX_BYTES = 512  # recomp_context: r0..r31 then f0..f31, eight bytes each
 _RAM_BASE = 0x80000000
-_MAX_WRITES = 64  # words a recorded call may have written; a call that wrote more is kept without its writes
+_MAX_WRITES = 16384  # words a recorded call may have written; a call that wrote more is kept without its writes
 _MAX_CALLS = 4096
 _TIMEOUT = 124  # what `timeout` exits with when it stopped the run
 _KNOWN = {"facts", "host", "work_root", "gdb", "env", "timeout_seconds", "trace_seconds", "jobs", "host_inputs",
@@ -272,7 +272,8 @@ class _Setup:
     def keys(self, target: str, hit: int, names: list[str], script_source: bytes,
              condition: str | None = None) -> tuple[str, str]:
         """The capture's key and the key of whether the run reaches the entry (the recorded stubs do not change it)."""
-        digest = hashlib.sha256(script_source + (b"\0" + condition.encode() if condition else b"")).hexdigest()
+        digest = hashlib.sha256(script_source + Path(__file__).with_name("gdb_capture_many.py").read_bytes()
+                                + (b"\0" + condition.encode() if condition else b"")).hexdigest()
         args = (self.rom_sha1, target, self.vrams[target], hit, self.rdram_size, self.built["host_sha256"])
         return (_key(*args, names, self.built["inputs_digest"], digest, self.env),
                 _key(*args, [], self.built["inputs_digest"], digest, self.env))
@@ -320,6 +321,8 @@ class _Setup:
             "rdram_path": str(root / "rdram.bin"),
             "rdram_sha256": hashlib.sha256(ram).hexdigest(),
             "rdram_bytes": len(ram),
+            "environment": dict(self.env),
+            "memory_policy": "full RDRAM at entry",
             "registers": {name: f"{value:#x}" for name, value in registers.items()},
             "sp": f"{registers['r29'] & 0xFFFFFFFF:#010x}",
             "stubs": names,
@@ -461,21 +464,24 @@ def _capture_group(
     rows: dict[str, dict[str, Any]] = {}
     todo: dict[str, dict[str, Any]] = {}
     for item in plan:
-        label = str(item["function"])
+        label = f"{item['function']}@{item.get('hit', hit)}"
+        number = int(item.get("hit", hit))
+        if number < 1:
+            raise TasteError("repro.capture", "hit counts from 1")
         names = sorted(set(item.get("stubs", [])))
         try:
-            target = setup.target(label)
-            key, reach = setup.keys(target, hit, names, single)
+            target = setup.target(str(item["function"]))
+            key, reach = setup.keys(target, number, names, single)
             cached = setup.cached(key, reach, started)
         except TasteError as exc:
             rows[label] = {"function": label, "status": exc.key, "message": exc.detail}
             continue
         if cached:
             rows[label] = {"function": target, "status": "captured", "key": key, "cached": True,
-                           "wall_seconds": cached["wall_seconds"]}
+                           "wall_seconds": cached["wall_seconds"], "capture": cached, "seed": seed_of(cached)}
         else:
             todo.setdefault(f"{target}/{key}", {"labels": [], "target": target, "names": names, "key": key,
-                                                "reach": reach})["labels"].append(label)
+                                                "reach": reach, "hit": number})["labels"].append(label)
     receipt = ""
     if todo:
         _display(profile, config, env)
@@ -489,7 +495,7 @@ def _capture_group(
                 (scratch / stale).unlink(missing_ok=True)
             (setup.work / "captures" / item["key"] / "capture.json").unlink(missing_ok=True)
             item["scratch"] = scratch
-            targets.append({"symbol": item["target"], "out": str(scratch), "stubs": item["names"]})
+            targets.append({"symbol": item["target"], "out": str(scratch), "stubs": item["names"], "hit": item["hit"]})
         script = batch_root / "gdb_capture_many.py"
         atomic_bytes(script, script_source)
         atomic_json(batch_root / "config.json", gdb_batch_config(
@@ -516,12 +522,12 @@ def _capture_group(
             scratch = item["scratch"]
             row: dict[str, Any]
             if (scratch / "done").is_file() and (scratch / "rdram.host").is_file() and (scratch / "ctx.bin").is_file():
-                record = setup.commit(target=item["target"], hit=hit, names=item["names"], key=item["key"],
+                record = setup.commit(target=item["target"], hit=item["hit"], names=item["names"], key=item["key"],
                                       reach=item["reach"], scratch=scratch, receipt=receipt, started=started)
                 row = {"function": item["target"], "status": "captured", "key": item["key"],
-                       "cached": False, "calls": record["calls"], "calls_complete": record["calls_complete"]}
+                       "cached": False, "calls": record["calls"], "calls_complete": record["calls_complete"], "capture": record, "seed": seed_of(record)}
             elif timed_out:
-                message = (f"{item['target']} entry hit {hit} was not reached within {seconds}s of the oracle run "
+                message = (f"{item['target']} entry hit {item['hit']} was not reached within {seconds}s of the oracle run "
                            "(a batch capture); reaching it needs a scripted input in repro.capture.env or a longer "
                            "repro.capture.batch_seconds")
                 atomic_json(setup.work / "misses" / f"{item['reach']}.json",
@@ -530,10 +536,10 @@ def _capture_group(
             else:
                 row = {"function": item["target"], "status": "repro.capture.oracle_exit",
                        "message": f"the oracle ended (exit {ran['status'].get('exit_code')}) before "
-                       f"{item['target']} entry hit {hit}; receipt: {receipt}"}
+                       f"{item['target']} entry hit {item['hit']}; receipt: {receipt}"}
             for label in item["labels"]:
                 rows[label] = row
-    ordered = [rows[str(item["function"])] for item in plan]
+    ordered = [rows[f"{item['function']}@{item.get('hit', hit)}"] for item in plan]
     counts: dict[str, int] = {}
     for row in ordered:
         counts[row["status"]] = counts.get(row["status"], 0) + 1
