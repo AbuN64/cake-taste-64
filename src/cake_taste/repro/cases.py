@@ -115,6 +115,23 @@ def parse_events(text: str) -> list[dict[str, Any]]:
                 }
             elif kind == "saved":
                 current["saved"] = parts[1:]
+            elif kind == "fpu":
+                if parts[1] == "unknown":
+                    current["fpu"] = None
+                else:
+                    csr = int(parts[1], 16)
+                    if csr & ~0x7F:
+                        raise ValueError("unsupported FP effect bits")
+                    current["fpu"] = {
+                        "rounding": csr & 3,
+                        "flags": csr & 0x7C,
+                        "exceptions": [
+                            name for bit, name in enumerate(
+                                ("inexact", "underflow", "overflow", "divide-by-zero", "invalid"), 2
+                            ) if csr & (1 << bit)
+                        ],
+                        "guest_exception_enables": "unmodeled",
+                    }
             elif kind == "net":
                 current["net"].append([int(parts[1], 16), int(parts[2], 16)])
             elif kind == "overflow":
@@ -302,7 +319,7 @@ def cases_probe(profile: Any, *, function: str | None, script: Path) -> dict[str
     digest = hashlib.sha256(
         unit.encode()
         + header.encode()
-        + b"".join(sha256_file(host / "behave" / name).encode() for name in ("harness.c", "behave.h"))
+        + b"".join(sha256_file(host / "behave" / name).encode() for name in ("harness.c", "behave.h", "fpu.h"))
     ).hexdigest()[:16]
     work = work_root / f"behave-{root}-{digest}"
     work.mkdir(parents=True, exist_ok=True)
@@ -409,8 +426,11 @@ def cases_probe(profile: Any, *, function: str | None, script: Path) -> dict[str
     else:
         atomic_json(cases_path, results, sort_keys=True, compact=True)
     statuses: dict[str, int] = {}
+    fpu_exceptions: dict[str, int] = {}
     for result in results:
         statuses[result["status"]] = statuses.get(result["status"], 0) + 1
+        for exception in (result.get("fpu") or {}).get("exceptions", []):
+            fpu_exceptions[exception] = fpu_exceptions.get(exception, 0) + 1
     record = {
         "schema": 1,
         "kind": "cases",
@@ -434,6 +454,8 @@ def cases_probe(profile: Any, *, function: str | None, script: Path) -> dict[str
         "lenient": bool(request.get("lenient")),
         "events_max": max((r.get("events_written", 0) for r in results), default=0),
         "statuses": statuses,
+        "fpu_exceptions": fpu_exceptions,
+        "guest_exception_enables": "unmodeled",
         "cases_path": str(cases_path),
         "cases_sha256": sha256_file(cases_path),
         "build_receipt": build_receipt,

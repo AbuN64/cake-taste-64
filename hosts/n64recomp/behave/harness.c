@@ -26,6 +26,7 @@
 #include <sys/time.h>
 #include "recomp.h"
 #include "behave.h"
+#include "fpu.h"
 #include "host_profile.h"
 
 extern const probe_func probe_funcs[];
@@ -316,6 +317,8 @@ static void run_case(casebuf *c, unsigned timeout_ms) {
     for (int i = 0; i < 32; ++i) fsaved_in[i] = fpr_slot(&ctx, i)->u64;
     const char *status = "ok";
     char detail[160] = "";
+    fenv_t saved_fpu;
+    behave_fpu_begin(&saved_fpu);
     struct itimerval timer = {{0, 0}, {timeout_ms / 1000, (timeout_ms % 1000) * 1000}};
     signal(SIGALRM, on_alarm);
     signal(SIGABRT, on_abort);
@@ -342,6 +345,9 @@ static void run_case(casebuf *c, unsigned timeout_ms) {
             snprintf(detail, sizeof detail, "%s %08X %X last %08X", stop_what, stop_a, stop_b, last_va);
         }
     }
+    unsigned fpu_effects = behave_fpu_end(&saved_fpu);
+    if (!jumped) fprintf(out, "fpu %X\n", fpu_effects);
+    else fputs("fpu unknown\n", out);
     settle();
     if (!jumped) {
         fprintf(out, "ret %X %X %llX %llX\n", (uint32_t)ctx.r2, (uint32_t)ctx.r3, (unsigned long long)ctx.f0.u64,

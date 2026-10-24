@@ -270,7 +270,7 @@ class FlowTests(unittest.TestCase):
                 json.dumps({"version": "v1", "boot": {"rdram_size": 0x1000, "sp": 0x800007F0}})
             )
             (root / "host" / "behave").mkdir(parents=True)
-            for name in ("harness.c", "behave.h"):
+            for name in ("harness.c", "behave.h", "fpu.h"):
                 (root / "host" / "behave" / name).write_text("x")
             request = root / "request.json"
             request.write_text(
