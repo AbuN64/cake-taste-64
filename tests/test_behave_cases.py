@@ -291,6 +291,7 @@ class FlowTests(unittest.TestCase):
                     "recomp_include": None,
                     "trace_mode": True,
                     "rom": lambda self, v: root / "rom",
+                    "names_for": lambda self, v: {0x80001000: "osRecvMesg"},
                 },
             )()
             profile = type(
@@ -347,6 +348,7 @@ class FlowTests(unittest.TestCase):
             )
             again = probe()  # the same original request: nothing is built or run
             self.assertTrue(again["probe"]["cached"])
+            self.assertEqual(again["probe"]["replaced"], {"osRecvMesg_recomp": "0x80001000"})  # also on a cache hit
             self.assertEqual(len(commands), 2)
             self.assertEqual(json.loads(Path(again["probe"]["cases_path"]).read_text()), frozen)
 

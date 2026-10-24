@@ -253,6 +253,9 @@ def cases_probe(profile: Any, *, function: str | None, script: Path) -> dict[str
     if facts.get("version") not in (None, version) or "rdram_size" not in boot:
         raise TasteError("repro.facts", f"facts {config['facts']} do not describe {version} with boot.rdram_size")
     gen = settings.out(version)
+    # the runtime names N64Recomp gives the libultra routines it replaces (osRecvMesg_recomp), at their vram: behave
+    # finds their prototypes through the project's own name at that address
+    replaced = {f"{name}_recomp": f"{address:#x}" for address, name in sorted(settings.names_for(version).items())}
     vrams = function_vrams(gen / "symbols.toml")
     target = resolve_target(str(target_text), vrams)
     bodies = index_bodies(gen / "funcs")
@@ -348,7 +351,8 @@ def cases_probe(profile: Any, *, function: str | None, script: Path) -> dict[str
         if (cache / "probe.json").is_file():
             cached = json.loads((cache / "probe.json").read_text())
             return {
-                "probe": {**cached, "cached": True, "wall_seconds": round(time.monotonic() - started, 3)},
+                "probe": {**cached, "cached": True, "wall_seconds": round(time.monotonic() - started, 3),
+                          "replaced": replaced},
                 "run_id": key,
                 "receipt": str(cache / "receipt.json"),
             }
@@ -466,6 +470,7 @@ def cases_probe(profile: Any, *, function: str | None, script: Path) -> dict[str
         "lock_wait_seconds": round(waited, 3),
         "sp": sp,
         "stack_window": window,
+        "replaced": replaced,
         "cached": False,
         "checked": None,
         "differences": None,
