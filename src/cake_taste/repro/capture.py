@@ -525,9 +525,11 @@ def _capture_group(
                 record = setup.commit(target=item["target"], hit=item["hit"], names=item["names"], key=item["key"],
                                       reach=item["reach"], scratch=scratch, receipt=receipt, started=started)
                 row = {"function": item["target"], "status": "captured", "key": item["key"],
-                       "cached": False, "calls": record["calls"], "calls_complete": record["calls_complete"], "capture": record, "seed": seed_of(record)}
+                       "cached": False, "calls": record["calls"], "calls_complete": record["calls_complete"],
+                       "capture": record, "seed": seed_of(record)}
             elif timed_out:
-                message = (f"{item['target']} entry hit {item['hit']} was not reached within {seconds}s of the oracle run "
+                message = (f"{item['target']} entry hit {item['hit']} was not reached within {seconds}s "
+                           "of the oracle run "
                            "(a batch capture); reaching it needs a scripted input in repro.capture.env or a longer "
                            "repro.capture.batch_seconds")
                 atomic_json(setup.work / "misses" / f"{item['reach']}.json",
