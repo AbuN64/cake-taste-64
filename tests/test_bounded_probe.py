@@ -218,3 +218,16 @@ class BoundedProbeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ContinuationTests(unittest.TestCase):
+    def test_fallthrough_tail_call_announces_itself_to_a_tracing_host(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            funcs = Path(tmp)
+            tail = "    /* MIPS fallthrough to adjacent entry */\n    next(rdram, ctx);\n    return;\n"
+            (funcs / "funcs_0.c").write_text(
+                HEAD.format("first") + "    ctx->r29 -= 8;\n" + tail + ";}\n" + body("next")
+            )
+            text = index_bodies(funcs)["first"]
+            self.assertIn("#ifdef TRACE_FALLTHROUGH\n    TRACE_FALLTHROUGH();\n#endif\n    next(rdram, ctx);", text)
+            self.assertNotIn("TRACE_FALLTHROUGH", index_bodies(funcs)["next"])

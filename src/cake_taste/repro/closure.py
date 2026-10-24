@@ -54,10 +54,21 @@ def index_bodies(funcs_dir: Path) -> dict[str, str]:
                 raise TasteError(
                     "repro.generated", f"{path}: {match.group(1)} has no closing ';}}'{_refusal(funcs_dir)}"
                 )
-            bodies[match.group(1)] = text[match.start() : stop + len(_END)]
+            bodies[match.group(1)] = _continuation(text[match.start() : stop + len(_END)])
     if not bodies:
         raise TasteError("repro.generated", f"no generated functions under {funcs_dir}")
     return bodies
+
+
+_FALLTHROUGH = re.compile(r"^([ \t]*)(/\* MIPS fallthrough to adjacent entry \*/)\n", re.MULTILINE)
+
+
+def _continuation(body: str) -> str:
+    """A function that runs on into the next symbol's entry (recomp.fallthrough) is one function: the tail call
+    announces itself first, so a host that traces entries (TRACE_FALLTHROUGH) does not count it as a callee."""
+    return _FALLTHROUGH.sub(
+        lambda m: f"{m[1]}{m[2]}\n#ifdef TRACE_FALLTHROUGH\n{m[1]}TRACE_FALLTHROUGH();\n#endif\n", body
+    )
 
 
 def _refusal(funcs_dir: Path) -> str:

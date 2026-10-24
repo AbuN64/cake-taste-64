@@ -162,7 +162,16 @@ static void args_line(const char *kind, const char *name, uint8_t *mem, recomp_c
             (uint32_t)ctx->r6, (uint32_t)ctx->r7, s[0], s[1], s[2], s[3], ctx->f12.u32l, ctx->f14.u32l);
     end_printing();
 }
-void behave_enter(const char *name, uint8_t *mem, recomp_context *ctx) { settle(); ++calls_seen; args_line("call", name, mem, ctx); }
+// A function whose last word falls into the next symbol (a hoisted prologue word the decomp splits off) tail-calls
+// that entry: the entry is the same function running on, so it writes no call event.
+static int continuing;
+void behave_fallthrough(void) { continuing = 1; }
+void behave_enter(const char *name, uint8_t *mem, recomp_context *ctx) {
+    settle();
+    if (continuing) { continuing = 0; return; }
+    ++calls_seen;
+    args_line("call", name, mem, ctx);
+}
 // A stub with no given answer returns zero, until a case has called it TICK_AFTER times: a body that spins on
 // a clock or a status the stub stands for would never leave, so from then on each call answers one step further
 // (v1, the low word of a 64-bit result, by 0x100000; v0 by one). Both bodies of a comparison see the same answers.
@@ -260,7 +269,7 @@ static void run_case(casebuf *c, unsigned timeout_ms) {
     recomp_context ctx;
     memset(&ctx, 0, sizeof ctx);
     ctx.f_odd = &ctx.f0.u32h;
-    nseeded = ncommon; pend.on = 0; last_va = 0; nstub_results = 0; nstub_calls = 0; nscalls = 0; nscall_words = 0; nscall_used = 0; events_written = 0; stack_events = 0; printing = 0; alarm_late = 0;
+    nseeded = ncommon; pend.on = 0; last_va = 0; nstub_results = 0; continuing = 0; nstub_calls = 0; nscalls = 0; nscall_words = 0; nscall_used = 0; events_written = 0; stack_events = 0; printing = 0; alarm_late = 0;
     memset(&reads, 0, sizeof reads); memset(&written, 0, sizeof written);
     fprintf(out, "case %s\n", c->name);
     char *line = c->ops, *next;

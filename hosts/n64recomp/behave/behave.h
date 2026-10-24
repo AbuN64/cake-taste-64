@@ -17,6 +17,7 @@ extern "C" {
 #endif
 void behave_enter(const char *name, uint8_t *rdram, recomp_context *ctx);
 void behave_stub(const char *name, uint8_t *rdram, recomp_context *ctx);
+void behave_fallthrough(void);
 uint8_t *behave_ptr(uint8_t *rdram, uint64_t va, int width);
 #ifdef __cplusplus
 }
@@ -64,6 +65,7 @@ BEHAVE_UNALIGNED_STORE(sdr, 7u)
 #define do_sdr behave_sdr
 
 #define TRACE_ENTRY() behave_enter(__func__, rdram, ctx);
+#define TRACE_FALLTHROUGH() behave_fallthrough()  // the entry reached next is this function running on, not a callee
 #define TRACE_RETURN()
 #define TRACE_LOOP() /* trace-mode backward branches; a spinning original is bounded by the case timeout */
 #define probe_stub(name) behave_stub(name, rdram, ctx)
