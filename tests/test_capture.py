@@ -1,10 +1,11 @@
+import ast
 import hashlib
 import json
 import struct
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from cake_taste import TasteError
 from cake_taste.repro import bounded, capture
@@ -90,6 +91,47 @@ class CaptureTests(unittest.TestCase):
         script = Path(capture.__file__).with_name("gdb_capture.py").read_text()
         self.assertIn('"*" + cfg["symbol"]', script)  # the exact entry, not a prologue skip that clobbers rdi/rsi
         self.assertIn("ignore_count", script)
+
+    def test_conditions_separate_captures_and_misses(self):
+        first = self.grab(condition="poll >= 10")
+        second = self.grab(condition="poll >= 20")
+        self.assertNotEqual(first["capture"]["key"], second["capture"]["key"])
+        self.assertEqual(second["capture"]["condition"], "poll >= 20")
+        self.assertTrue(self.grab(condition="poll >= 10")["capture"]["cached"])
+        self.reached = False
+        with self.assertRaises(TasteError):
+            self.grab(condition="poll == 99")
+        runs = len(self.runs)
+        with self.assertRaises(TasteError):
+            self.grab(condition="poll == 99")
+        self.assertEqual(len(self.runs), runs)
+        self.reached = True
+        self.assertFalse(self.grab(condition="poll == 100")["capture"]["cached"])
+
+    def test_entry_counts_only_matching_conditions_and_reports_expression_errors(self):
+        # Execute the actual breakpoint class against a fake debugger, without booting an oracle.
+        script = Path(capture.__file__).with_name("gdb_capture.py").read_text()
+        entry = next(n for n in ast.parse(script).body if isinstance(n, ast.ClassDef) and n.name == "Entry")
+        debugger = Mock()
+        debugger.error = RuntimeError
+        class Breakpoint:
+            def __init__(self, *args, **kwargs):
+                pass
+        scope = {"Mark": Breakpoint, "gdb": debugger, "cfg": {"symbol": "root", "hit": 2, "condition": "poll > 4"}}
+        exec(compile(ast.Module(body=[entry], type_ignores=[]), "Entry", "exec"), scope)
+        mark = scope["Entry"]()
+        debugger.parse_and_eval.side_effect = [False, True, False, True]
+        self.assertEqual([mark.stop() for _ in range(4)], [False, False, False, True])
+        self.assertEqual(mark.matches, 2)
+        debugger.parse_and_eval.side_effect = RuntimeError("unknown poll")
+        broken = scope["Entry"]()
+        self.assertTrue(broken.stop())
+        self.assertEqual(broken.error, "unknown poll")
+        self.assertEqual(broken.matches, 0)
+        scope["cfg"]["condition"] = None
+        plain = scope["Entry"]()
+        self.assertEqual(plain.ignore_count, 1)
+        self.assertTrue(plain.stop())
 
     def test_the_context_dump_names_the_entry_registers(self):
         regs = capture.parse_context(context(r4=0x80000100, f12=0x3F800000))

@@ -70,11 +70,34 @@ class Mark(gdb.Breakpoint):
     pass
 
 
+class Entry(Mark):
+    def __init__(self):
+        super().__init__("*" + cfg["symbol"], internal=True)
+        self.matches = 0
+        self.error = None
+        if not cfg.get("condition"):
+            self.ignore_count = cfg["hit"] - 1
+
+    def stop(self):
+        if not cfg.get("condition"):
+            self.matches = cfg["hit"]
+            return True
+        try:
+            matches = bool(gdb.parse_and_eval(cfg["condition"]))
+        except gdb.error as exc:
+            self.error = str(exc)
+            return True
+        if matches:
+            self.matches += 1
+        return self.matches >= cfg["hit"]
+
+
 def main():
-    entry = Mark("*" + cfg["symbol"], internal=True)
-    entry.ignore_count = cfg["hit"] - 1
+    entry = Entry()
     gdb.execute("run")
-    reached = alive() and entry.hit_count >= cfg["hit"]
+    if entry.error:
+        raise RuntimeError("capture condition: " + entry.error)
+    reached = alive() and entry.matches >= cfg["hit"]
     if not reached:
         print("CAPTURE-MISS")
         gdb.execute("thread apply all bt 6")

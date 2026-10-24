@@ -70,12 +70,13 @@ def _config(profile: Any) -> dict[str, Any]:
 
 
 def gdb_config(
-    symbol: str, hit: int, rdram_size: int, out: Path, stubs: list[str], trace_seconds: int = 30
+    symbol: str, hit: int, rdram_size: int, out: Path, stubs: list[str], trace_seconds: int = 30,
+    condition: str | None = None,
 ) -> dict[str, Any]:
     """The config of the gdb script (gdb_capture.py): where to stop, what to dump, which callees to record."""
     return {"symbol": symbol, "hit": hit, "rdram_size": rdram_size, "out": str(out), "stubs": stubs,
             "max_writes": _MAX_WRITES, "max_calls": _MAX_CALLS,
-            "trace_seconds": trace_seconds}
+            "trace_seconds": trace_seconds, "condition": condition}
 
 
 def parse_context(raw: bytes) -> dict[str, int]:
@@ -268,9 +269,10 @@ class _Setup:
     def target(self, function: str) -> str:
         return resolve_target(function, self.vrams)
 
-    def keys(self, target: str, hit: int, names: list[str], script_source: bytes) -> tuple[str, str]:
+    def keys(self, target: str, hit: int, names: list[str], script_source: bytes,
+             condition: str | None = None) -> tuple[str, str]:
         """The capture's key and the key of whether the run reaches the entry (the recorded stubs do not change it)."""
-        digest = hashlib.sha256(script_source).hexdigest()
+        digest = hashlib.sha256(script_source + (b"\0" + condition.encode() if condition else b"")).hexdigest()
         args = (self.rom_sha1, target, self.vrams[target], hit, self.rdram_size, self.built["host_sha256"])
         return (_key(*args, names, self.built["inputs_digest"], digest, self.env),
                 _key(*args, [], self.built["inputs_digest"], digest, self.env))
@@ -289,7 +291,7 @@ class _Setup:
         return None
 
     def commit(self, *, target: str, hit: int, names: list[str], key: str, reach: str, scratch: Path,
-               receipt: str, started: float) -> dict[str, Any]:
+               receipt: str, started: float, condition: str | None = None) -> dict[str, Any]:
         """Freeze one finished gdb dump (scratch holds rdram.host, ctx.bin and calls.json) as the capture of `key`."""
         root = self.work / "captures" / key
         ram = host_order((scratch / "rdram.host").read_bytes())
@@ -308,6 +310,7 @@ class _Setup:
             "function": target,
             "vram": f"{self.vrams[target]:#010x}",
             "hit": hit,
+            "condition": condition,
             "version": self.version,
             "rom_sha1": self.rom_sha1,
             "host_sha256": self.built["host_sha256"],
@@ -336,7 +339,7 @@ class _Setup:
 
 def capture_probe(
     profile: Any, *, function: str, version: str, hit: int = 1, stubs: tuple[str, ...] = (),
-    env: dict[str, str] | None = None, seconds: int | None = None,
+    env: dict[str, str] | None = None, seconds: int | None = None, condition: str | None = None,
 ) -> dict[str, Any]:
     """`env` and `seconds` are this capture's own run (the movie that reaches the function and how long it needs):
     they replace the profile's fixed input and raise its time limit, and they are part of the capture's key."""
@@ -349,7 +352,7 @@ def capture_probe(
     target = setup.target(function)
     host, seconds = setup.built["host"], setup.seconds
     script_source = Path(__file__).with_name("gdb_capture.py").read_bytes()
-    key, reach = setup.keys(target, hit, names, script_source)
+    key, reach = setup.keys(target, hit, names, script_source, condition)
     root = setup.work / "captures" / key
     done, miss = root / "capture.json", setup.work / "misses" / f"{reach}.json"
     cached = setup.cached(key, reach, started)
@@ -364,7 +367,7 @@ def capture_probe(
     script = scratch / "gdb_capture.py"
     atomic_bytes(script, script_source)
     trace = int(config.get("trace_seconds", 30))  # how long the callee trace may run after the stop
-    atomic_json(scratch / "config.json", gdb_config(target, hit, setup.rdram_size, scratch, names, trace))
+    atomic_json(scratch / "config.json", gdb_config(target, hit, setup.rdram_size, scratch, names, trace, condition))
     env["N64R_ROM"] = str(setup.rom)
     env["TASTE_CAPTURE_CONFIG"] = str(scratch / "config.json")
     ran = run_command(
@@ -394,7 +397,7 @@ def capture_probe(
         atomic_json(miss, {"message": message, "timeout_seconds": seconds, "receipt": ran["receipt"]})
         raise TasteError("repro.capture.unreached", f"{message}; receipt: {ran['receipt']}")
     record = setup.commit(target=target, hit=hit, names=names, key=key, reach=reach, scratch=scratch,
-                          receipt=ran["receipt"], started=started)
+                          receipt=ran["receipt"], started=started, condition=condition)
     return {"capture": record, "seed": seed_of(record)}
 
 
@@ -541,6 +544,7 @@ def _capture_group(
 def capture_many(
     profile: Any, *, functions: list[str], version: str, hit: int = 1, stubs: tuple[str, ...] = (),
     jobs: int | None = None, env: dict[str, str] | None = None, seconds: int | None = None,
+    condition: str | None = None,
 ) -> dict[str, Any]:
     """Capture several functions, `jobs` oracle runs at a time (default: the profile's `jobs`; the slot locks bound
     the total over every process). Each function ends captured or with its named finding."""
@@ -550,7 +554,7 @@ def capture_many(
     def one(function: str) -> dict[str, Any]:
         try:
             got = capture_probe(profile, function=function, version=version, hit=hit, stubs=stubs, env=env,
-                                seconds=seconds)
+                                seconds=seconds, condition=condition)
         except TasteError as exc:
             return {"function": function, "status": exc.key, "message": exc.detail}
         shown = got["capture"]

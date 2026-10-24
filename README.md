@@ -55,3 +55,5 @@ pip install -e '.[dev]' && python -m unittest discover -s tests && ruff check sr
 ## License
 
 Released under [GNU GPL version 3 or later](LICENSE).
+
+Oracle entry capture accepts `taste repro capture --condition EXPR`. The GDB expression must be true at the entry; `--hit` counts only matching entries. Use explicit host symbols or entry registers to select the replay poll and arguments. The condition is recorded and separates both successful captures and cached misses. An invalid expression fails capture.
