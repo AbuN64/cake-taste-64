@@ -9,6 +9,10 @@
 //                     checkpoints "poll-<n>" every N polls (with the golden dir) and writes the picture there
 //                     (view.cpp, N64R_TAS_SHOT_DIR), N64R_TAS_EXIT_AFTER=N quits N polls after the movie ends,
 //                     N64R_TAS_TRACE=FILE writes "poll vi" per guest controller poll (poll/VI parity with the port)
+//   N64R_TAS_STATE    a state spec (tas_state.h): N64R_TAS_STATE_HASH=FILE writes "<poll> <symbol>:<hash> ..." per
+//                     poll, N64R_TAS_STATE_AT=P1,P2 with N64R_TAS_STATE_DIR=DIR writes state-<poll>.bin there: the
+//                     port's own N64C_TAS_STATE trace, read from the word-swizzled RDRAM (TS_ORACLE), so
+//                     `decomp tas play --oracle` diffs the two sides' game state per poll
 #include <SDL.h>
 #include <array>
 #include <atomic>
@@ -25,6 +29,8 @@
 #include <unordered_map>
 #include <vector>
 #include "ultramodern/renderer_context.hpp"
+#define TS_ORACLE 1
+#include "tas_state.h"
 
 extern uint8_t *n64host_rdram;
 void n64host_script_key(const char *name);
@@ -61,6 +67,46 @@ struct Send {
 std::unordered_map<unsigned, Ring> &rings = *new std::unordered_map<unsigned, Ring>;
 std::deque<std::shared_ptr<Send>> &sends = *new std::deque<std::shared_ptr<Send>>;
 std::unordered_map<unsigned, std::shared_ptr<const Send>> &current = *new std::unordered_map<unsigned, std::shared_ptr<const Send>>;
+
+// N64R_TAS_STATE: the per-poll game state trace, the same lines the port writes (tas_state.h)
+struct ts_spec state;
+struct ts_polls state_at;
+FILE *state_hash;
+const char *state_dir;
+uint64_t *state_now;
+uint32_t *state_prev;
+int state_started;
+
+void state_init() {
+    const char *path = std::getenv("N64R_TAS_STATE");
+    if (!path || !*path) return;
+    if (ts_load(path, &state)) { std::fprintf(stderr, "n64host: cannot read state spec %s\n", path); std::_Exit(5); }
+    const char *out = std::getenv("N64R_TAS_STATE_HASH");
+    if (out && *out && !(state_hash = std::fopen(out, "w"))) {
+        std::fprintf(stderr, "n64host: cannot write state hashes %s\n", out);
+        std::_Exit(5);
+    }
+    state_dir = std::getenv("N64R_TAS_STATE_DIR");
+    ts_polls_parse(std::getenv("N64R_TAS_STATE_AT"), &state_at);
+    state_now = static_cast<uint64_t *>(std::calloc(state.nsymbols ? state.nsymbols : 1, sizeof *state_now));
+    state_prev = static_cast<uint32_t *>(std::calloc(state.nsymbols ? state.nsymbols : 1, sizeof *state_prev));
+}
+
+void state_poll(uint64_t poll) {
+    if (!state.nruns || !n64host_rdram) return;
+    if (state_hash) {
+        ts_hash(&state, n64host_rdram, state_now);
+        ts_trace_line(state_hash, long(poll), &state, state_now, state_prev, &state_started);
+    }
+    if (state_dir && ts_wanted(&state_at, long(poll))) {
+        std::string path = std::string(state_dir) + "/state-" + std::to_string(poll) + ".bin";
+        FILE *f = std::fopen(path.c_str(), "wb");
+        if (!f || ts_dump(&state, n64host_rdram, f) || std::fclose(f)) {
+            std::fprintf(stderr, "n64host: state dump at poll %llu to %s failed\n", (unsigned long long)poll, path.c_str());
+            std::_Exit(2);
+        }
+    }
+}
 
 bool on() { return events != nullptr; }
 uint8_t *ram(uint32_t addr) { return n64host_rdram + (addr & 0x3FFFFFF); }
@@ -121,6 +167,7 @@ extern "C" void n64host_golden_init() {
         if (!movie) { std::fprintf(stderr, "n64host: cannot read movie %s\n", m); std::_Exit(5); }
         if (const char *e = std::getenv("N64R_TAS_SHOT_EVERY")) shot_every = std::strtoull(e, nullptr, 10);
         if (const char *e = std::getenv("N64R_TAS_EXIT_AFTER")) exit_after = std::strtoull(e, nullptr, 10);
+        state_init();
     }
     const char *d = std::getenv("N64R_GOLDEN_DIR");
     if (!d) return;
@@ -212,6 +259,7 @@ extern "C" bool n64host_golden_pad(unsigned channel, uint16_t *buttons, int8_t *
     *buttons = held[0]; *x = held_x[0]; *y = held_y[0];
     ++polls;
     if (const char *t = std::getenv("N64R_TAS_TRACE")) { static FILE *tf = std::fopen(t, "w"); if (tf) { std::fprintf(tf, "%llu %llu\n", (unsigned long long)polls, (unsigned long long)vi_count.load()); std::fflush(tf); } }
+    state_poll(polls);
     const bool shot = shot_every && polls % shot_every == 0;
     if (shot && on()) checkpoint("poll-" + std::to_string(polls));
     const uint64_t poll = polls;
