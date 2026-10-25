@@ -11,6 +11,7 @@ class GoldenDocsTest(unittest.TestCase):
         names = set(re.findall(r"getenv\(\"(N64R_[A-Z_]+)\"\)", source))
         expected = {"N64R_GOLDEN_DIR", "N64R_SCRIPT", "N64R_SHOT_CMD"}
         tas = {"N64R_TAS_PLAY", "N64R_TAS_SHOT_EVERY", "N64R_TAS_EXIT_AFTER", "N64R_TAS_TRACE", "N64R_PADS"}
+        tas |= {"N64R_TAS_STATE", "N64R_TAS_STATE_HASH", "N64R_TAS_STATE_AT", "N64R_TAS_STATE_DIR"}
         self.assertEqual(names, expected | tas)
         docs = (HOST / "RUNTIME.md").read_text(encoding="utf-8")
         for name in names:

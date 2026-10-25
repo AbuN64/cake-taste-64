@@ -311,6 +311,10 @@ unset the host behaves as before. It knows nothing about any game.
   `N64R_TAS_TRACE` (file) writes "poll vi" per controller poll, the same line the port's `N64C_TAS_TRACE` writes.
   `N64R_TAS_EXIT_AFTER` (N) quits N polls after the movie ends. The movie replays
   without `N64R_GOLDEN_DIR` too (then only the pictures below are written).
+- `N64R_TAS_STATE`: a state spec (`tas_state.h`, the port's `N64C_TAS_STATE` twin). `N64R_TAS_STATE_HASH` (file)
+  writes `<poll> <symbol>:<hash> ...` per controller poll; `N64R_TAS_STATE_AT` (P1,P2) with `N64R_TAS_STATE_DIR`
+  (dir) writes `state-<poll>.bin` there. The words are read from the word-swizzled RDRAM (`TS_ORACLE`), so the two
+  sides' traces compare: `decomp tas play --oracle` diffs the game state poll by poll.
 - `N64R_PADS` (1..4, default 1): controllers the guest sees. A movie line then holds that many `BUTTONS X Y` triples
   (pad 1 first), and channel 0's read of a poll advances the movie for every channel; the port's `N64C_PADS` is the twin.
 
