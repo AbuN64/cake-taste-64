@@ -16,6 +16,7 @@ from cake_taste.files import atomic_bytes, atomic_json, sha256_file
 
 from .fallthrough import link_fallthroughs
 from .indirect import hooks as indirect_hooks
+from .indirect import walked as walked_tables
 from .model import Section, boot_segment, build_sections, c_name, flat_image, symbols_toml
 from .settings import Settings
 from .splat import Layout, parse_layout
@@ -110,10 +111,14 @@ def config_toml(settings: Settings, version: str, entry: int | None, ignored: li
         lines.append(f"relocatable_sections_path = {json.dumps(str(out / 'relocatable_sections.txt'))}")
     lines += ["", "[patches]", f"stubs = {_array([c_name(n) for n in settings.stubs])}",
               f"ignored = {_array([c_name(n) for n in ignored])}", ""]
-    facts = settings.local_indirect_jumps.get(version, [])
+    # the profile's sourced facts, then every walked jump table the detector finds that no fact names (PF5)
+    _, sections, _ = build(settings, version, statics)
+    rom = settings.rom(version).read_bytes()
+    facts = list(settings.local_indirect_jumps.get(version, []))
+    named = {(int(str(f.get("function")), 0), int(str(f.get("pc")), 0)) for f in facts}
+    facts += [f for f in walked_tables(sections, rom) if (int(f["function"], 16), int(f["pc"], 16)) not in named]
     if facts:
-        _, sections, _ = build(settings, version, statics)
-        lines += indirect_hooks(facts, [f for s in sections for f in s.functions], settings.rom(version).read_bytes())
+        lines += indirect_hooks(facts, [f for s in sections for f in s.functions], rom)
     return "\n".join(lines)
 
 

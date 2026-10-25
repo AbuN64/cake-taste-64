@@ -46,3 +46,28 @@ class LocalIndirectTests(unittest.TestCase):
         same = struct.pack(">8I", 0x23 << 26 | 2 << 21 | 2 << 16, 2 << 21 | 8, 0, 0, 0, 0, 0, 0)
         text = tomllib.loads("\n".join(hooks([fact], [fn], same)))["patches"]["hook"][0]["text"]
         self.assertIn("switch ((uint32_t)ctx->r2 & 0x1FFFFFFFu)", text)
+
+
+class WalkedTableTests(unittest.TestCase):
+    """PF5 (PORT-FIX-O1): a jump table a loop walks by pointer, found by its pattern instead of a hand fact."""
+
+    def test_a_walked_table_is_found_with_its_targets_and_a_plain_jr_is_not(self):
+        from types import SimpleNamespace
+
+        from cake_taste.recomp.indirect import walked
+
+        # 0x1000: addiu s1,s1,4 / lw v0,0(s1) / jr v0 / nop / 4 nops; the table at rom 0x40 holds two low aliases
+        code = [9 << 26 | 17 << 21 | 17 << 16 | 4, 0x23 << 26 | 17 << 21 | 2 << 16, 2 << 21 | 8, 0, 0, 0, 0, 0]
+        rom = bytearray(0x60)
+        struct.pack_into(">8I", rom, 0, *code)
+        struct.pack_into(">3I", rom, 0x40, 0x00001010, 0x00001014, 0xDEADBEEF)
+        fn = Function("walk", 0, 0x80001000, 32)
+        sections = [SimpleNamespace(rom=0, size=0x60, functions=(fn,))]
+        found = walked(sections, bytes(rom))
+        self.assertEqual(len(found), 1)
+        self.assertEqual((found[0]["pc"], found[0]["targets"]), ("0x80001008", ["0x80001010", "0x80001014"]))
+        self.assertIn("table at ROM 0x40", found[0]["source"])
+        hooks(found, [fn], bytes(rom))  # the detected fact passes the hook checks
+        code[0] = 0  # no stepped base: an ordinary computed jump
+        struct.pack_into(">8I", rom, 0, *code)
+        self.assertEqual(walked(sections, bytes(rom)), [])
