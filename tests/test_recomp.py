@@ -332,11 +332,12 @@ class RecompTests(unittest.TestCase):
             run(profile, ("symbols", "--version", "v1"))
             data = tomllib.loads((Path(t) / "gen/v1/symbols.toml").read_text())
             names = [f["name"] for f in data["section"][0]["functions"]]
-            self.assertEqual(names, ["game_frexp", "sqrt"])  # sqrt is N64Recomp's own reimplemented name: the runtime has it
+            self.assertEqual(names, ["game_frexp", "sqrt"])  # sqrt: N64Recomp reimplements it
             from cake_taste.recomp.settings import load
             config = tomllib.loads(config_toml(load(profile), "v1", None, ["frexp", "osStub"], []))
             self.assertEqual(config["patches"]["ignored"], ["game_frexp", "osStub"])
-        self.assertEqual((c_name("frexp"), c_name("Frexp_Init"), c_name("game_frexp")), ("game_frexp", "Frexp_Init", "game_frexp"))
+        self.assertEqual(c_name("frexp"), "game_frexp")
+        self.assertEqual((c_name("Frexp_Init"), c_name("game_frexp")), ("Frexp_Init", "game_frexp"))
 
     def test_static_inside_a_known_function_is_a_named_error(self):
         body = "#!/bin/sh\necho 'Error recompiling static_0_80200404' >&2\nexit 1\n"

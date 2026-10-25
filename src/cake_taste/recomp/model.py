@@ -176,7 +176,7 @@ def flat_image(layout: Layout, rom_size: int) -> FlatImage:
     return FlatImage(end, offsets, tuple(parts))
 
 
-# Identifiers the host's own headers (libc, libm, POSIX, SDL's includes) declare. A game function with one of these names
+# Identifiers the host's own headers (libc, libm, POSIX, SDL's includes) declare. A game function with one of these
 # (an SDK or libgcc routine such as frexp) gets a different C name in the recompiled output, or the host cannot compile.
 _HOST_WORDS = """
     abs acos acosf asin asinf atan atan2 atan2f atanf atof atoi atol bcmp bcopy bsearch bzero calloc
