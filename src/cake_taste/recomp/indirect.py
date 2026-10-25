@@ -6,6 +6,8 @@ import struct
 
 from cake_taste import TasteError
 
+from .model import c_name
+
 
 def _number(value):
     return int(value, 0) if isinstance(value, str) else value
@@ -40,7 +42,7 @@ def hooks(facts, functions, rom: bytes) -> list[str]:
             text += [f'default: switch_error("{fn.name}", 0x{pc:08X}u, 0);', "}"]
             entries = [(pc, "\n".join(text)), *((t, _label(pc, t) + ":;") for t in targets)]
             for address, code in entries:
-                result += ["[[patches.hook]]", f"func = {json.dumps(fn.name)}",
+                result += ["[[patches.hook]]", f"func = {json.dumps(c_name(fn.name))}",
                            f"before_vram = 0x{address:08X}", f"text = {json.dumps(code)}", ""]
     except (KeyError, TypeError, ValueError, StopIteration, struct.error) as exc:
         raise TasteError("recomp.indirect", f"invalid local_indirect_jumps: {exc}") from exc

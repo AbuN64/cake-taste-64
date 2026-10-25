@@ -176,6 +176,37 @@ def flat_image(layout: Layout, rom_size: int) -> FlatImage:
     return FlatImage(end, offsets, tuple(parts))
 
 
+# Identifiers the host's own headers (libc, libm, POSIX, SDL's includes) declare. A game function with one of these names
+# (an SDK or libgcc routine such as frexp) gets a different C name in the recompiled output, or the host cannot compile.
+_HOST_WORDS = """
+    abs acos acosf asin asinf atan atan2 atan2f atanf atof atoi atol bcmp bcopy bsearch bzero calloc
+    cbrt ceil ceilf clock close copysign cos cosf cosh creat div erf exit exp exp2 expf expm1 fabs
+    fabsf fclose fdim fflush fgetc fgets floor floorf fma fmax fmin fmod fmodf fopen fprintf fputc
+    fputs fread free freopen frexp frexpf fscanf fseek fsetpos ftell fwrite getc getchar getenv gets
+    gmtime hypot ilogb index isalnum isalpha iscntrl isdigit isgraph islower isprint ispunct isspace
+    isupper isxdigit labs ldexp ldexpf ldiv lgamma localtime log log10 log10f log1p log2 logb logf
+    longjmp lseek malloc mblen memccpy memchr memcmp memcpy memmove memset mkdir mktime modf modff
+    nan nearbyint nextafter open perror pow powf printf putc putchar puts qsort raise rand read
+    realloc remainder remove rename rewind rindex rint round roundf scanf setbuf setjmp setvbuf
+    signal sin sinf sinh snprintf sprintf sqrt sqrtf srand sscanf stat strcat strchr strcmp strcoll
+    strcpy strcspn strdup strerror strlen strncat strncmp strncpy strpbrk strrchr strspn strstr
+    strtod strtof strtok strtol strtoul system tan tanf tanh tgamma time tmpfile tolower toupper
+    trunc truncf ungetc unlink vfprintf vprintf vsnprintf vsprintf wait write alloca ffs _exit abort
+    atexit
+"""
+# N64Recomp's own reimplemented-function list (symbol_lists.cpp): the runtime already supplies these
+_RUNTIME_WORDS = """
+    sqrt sqrtf memcpy memset memmove memcmp strcmp strcpy strlen sprintf bzero bcopy bcmp ceil floor
+    fmod modf rand srand
+"""
+_HOST_NAMES = frozenset(_HOST_WORDS.split()) - frozenset(_RUNTIME_WORDS.split())
+
+
+def c_name(name: str) -> str:
+    """The C name the recompiled output gives a function: `game_<name>` for a name the host's headers declare."""
+    return f"game_{name}" if name in _HOST_NAMES else name
+
+
 def symbols_toml(sections: list[Section], offsets: dict[str, int]) -> str:
     out = ["# N64Recomp symbols file written by `taste recomp symbols`", ""]
     for section in sections:
@@ -188,7 +219,7 @@ def symbols_toml(sections: list[Section], offsets: dict[str, int]) -> str:
             "functions = [",
         ]
         for f in section.functions:
-            out.append(f"    {{ name = {json.dumps(f.name)}, vram = 0x{f.vram:08X}, size = 0x{f.size:X} }},")
+            out.append(f"    {{ name = {json.dumps(c_name(f.name))}, vram = 0x{f.vram:08X}, size = 0x{f.size:X} }},")
         out += ["]", ""]
     return "\n".join(out)
 

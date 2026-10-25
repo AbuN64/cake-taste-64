@@ -16,7 +16,7 @@ from cake_taste.files import atomic_bytes, atomic_json, sha256_file
 
 from .fallthrough import link_fallthroughs
 from .indirect import hooks as indirect_hooks
-from .model import Section, boot_segment, build_sections, flat_image, symbols_toml
+from .model import Section, boot_segment, build_sections, c_name, flat_image, symbols_toml
 from .settings import Settings
 from .splat import Layout, parse_layout
 from .supplement import read_sections
@@ -108,7 +108,8 @@ def config_toml(settings: Settings, version: str, entry: int | None, ignored: li
         lines.append(f"functions_per_output_file = {settings.functions_per_output_file}")
     if overlays:
         lines.append(f"relocatable_sections_path = {json.dumps(str(out / 'relocatable_sections.txt'))}")
-    lines += ["", "[patches]", f"stubs = {_array(list(settings.stubs))}", f"ignored = {_array(ignored)}", ""]
+    lines += ["", "[patches]", f"stubs = {_array([c_name(n) for n in settings.stubs])}",
+              f"ignored = {_array([c_name(n) for n in ignored])}", ""]
     facts = settings.local_indirect_jumps.get(version, [])
     if facts:
         _, sections, _ = build(settings, version, statics)

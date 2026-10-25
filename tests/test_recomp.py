@@ -320,6 +320,24 @@ class RecompTests(unittest.TestCase):
                 with self.assertRaises(TasteError):
                     run(profile, ("symbols", "--version", "v1"))
 
+    def test_a_game_function_named_like_a_host_library_function_gets_another_c_name(self):
+        """The host compiles the generated funcs.h beside libc and SDL headers: a game `frexp` made it fail to build."""
+        from cake_taste.recomp.generate import config_toml
+        from cake_taste.recomp.model import c_name
+        with tempfile.TemporaryDirectory() as t:
+            profile = build(Path(t))
+            section = profile.section
+            profile.section = lambda name: {**section(name), "symbol_names": {"v1": {
+                "0x80200400": "frexp", "0x80200408": "sqrt"}}}
+            run(profile, ("symbols", "--version", "v1"))
+            data = tomllib.loads((Path(t) / "gen/v1/symbols.toml").read_text())
+            names = [f["name"] for f in data["section"][0]["functions"]]
+            self.assertEqual(names, ["game_frexp", "sqrt"])  # sqrt is N64Recomp's own reimplemented name: the runtime has it
+            from cake_taste.recomp.settings import load
+            config = tomllib.loads(config_toml(load(profile), "v1", None, ["frexp", "osStub"], []))
+            self.assertEqual(config["patches"]["ignored"], ["game_frexp", "osStub"])
+        self.assertEqual((c_name("frexp"), c_name("Frexp_Init"), c_name("game_frexp")), ("game_frexp", "Frexp_Init", "game_frexp"))
+
     def test_static_inside_a_known_function_is_a_named_error(self):
         body = "#!/bin/sh\necho 'Error recompiling static_0_80200404' >&2\nexit 1\n"
         with tempfile.TemporaryDirectory() as t:
