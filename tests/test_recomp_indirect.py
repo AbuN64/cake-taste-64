@@ -36,3 +36,13 @@ class LocalIndirectTests(unittest.TestCase):
         for instruction, delay in ((2 << 21 | 8, 0x24420001), (31 << 21 | 8, 0), (0, 0)):
             with self.subTest(instruction=instruction, delay=delay), self.assertRaises(TasteError):
                 hooks([self.fact], [self.fn], struct.pack(">II", instruction, delay)+bytes(24))
+    def test_switches_on_the_table_word_when_a_lw_from_another_base_feeds_the_jr(self):
+        fn = Function("walk", 0, 0x80001000, 32)
+        lw = 0x23 << 26 | 17 << 21 | 2 << 16  # lw v0, 0(s1): upstream may emit it as the slot address
+        rom = struct.pack(">8I", lw, 2 << 21 | 8, 0, 0, 0, 0, 0, 0)
+        fact = {**self.fact, "pc": "0x80001004", "targets": ["0x80001010", "0x80001018"]}
+        text = tomllib.loads("\n".join(hooks([fact], [fn], rom)))["patches"]["hook"][0]["text"]
+        self.assertIn("switch ((uint32_t)MEM_W(0, ctx->r17) & 0x1FFFFFFFu)", text)
+        same = struct.pack(">8I", 0x23 << 26 | 2 << 21 | 2 << 16, 2 << 21 | 8, 0, 0, 0, 0, 0, 0)
+        text = tomllib.loads("\n".join(hooks([fact], [fn], same)))["patches"]["hook"][0]["text"]
+        self.assertIn("switch ((uint32_t)ctx->r2 & 0x1FFFFFFFu)", text)

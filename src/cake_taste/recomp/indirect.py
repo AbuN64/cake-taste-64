@@ -16,6 +16,17 @@ def _number(value):
 def _label(pc, target):
     return f"local_{pc:08X}_{target:08X}"
 
+def _selector(rom: bytes, offset: int, start: int, pc: int, reg: int) -> str:
+    """The C value the jr dispatches on. When the word before the jr is  with another base register,
+    switch on that memory word: upstream may have recognised the table and emitted the lw as an address computation
+    (its switch then reads an addend saved once, wrong for a table pointer walked by a loop), so the register would
+    hold the table slot, not the target. Otherwise switch on the register."""
+    if pc - 4 >= start:
+        (previous,) = struct.unpack_from(">I", rom, offset - 4)
+        base, rt, imm = (previous >> 21) & 31, (previous >> 16) & 31, previous & 0xFFFF
+        if previous >> 26 == 0x23 and rt == reg and base != reg:
+            return f"MEM_W({imm - 0x10000 if imm & 0x8000 else imm}, ctx->r{base})"
+    return f"ctx->r{reg}"
 def hooks(facts, functions, rom: bytes) -> list[str]:
     """Use upstream hooks; never skip a side-effecting branch delay instruction."""
     result = []
@@ -37,7 +48,7 @@ def hooks(facts, functions, rom: bytes) -> list[str]:
             if instruction != (reg << 21) | 8 or reg in (0, 31) or delay:
                 raise ValueError("only jr through a general register with a nop delay slot is qualified")
             seen.add((start, pc))
-            text = [f"switch ((uint32_t)ctx->r{reg} & 0x1FFFFFFFu) {{"]
+            text = [f"switch ((uint32_t){_selector(rom, offset, start, pc, reg)} & 0x1FFFFFFFu) {{"]
             text += [f"case 0x{t & 0x1fffffff:08X}u: goto {_label(pc, t)};" for t in targets]
             text += [f'default: switch_error("{fn.name}", 0x{pc:08X}u, 0);', "}"]
             entries = [(pc, "\n".join(text)), *((t, _label(pc, t) + ":;") for t in targets)]
