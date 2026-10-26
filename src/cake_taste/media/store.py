@@ -2,9 +2,6 @@
 
 import hashlib
 import json
-import os
-import shutil
-import tempfile
 from pathlib import Path, PurePosixPath
 
 from cake_taste.files import sha256_file
@@ -86,30 +83,3 @@ def audit(root, require_index=True):
         "manifest_sha256": hashlib.sha256(manifest_data).hexdigest(),
         "files": entries,
     }
-
-
-def import_verified(source, target):
-    """Copy a historical store once; preserve catalog bytes, IDs, and mtimes."""
-    source = Path(source).resolve(strict=True)
-    target = Path(target)
-    if target.resolve().is_relative_to(source):
-        raise ValueError("Import target cannot be inside the source store")
-    if target.exists() or target.is_symlink():
-        raise FileExistsError(f"Import target already exists: {target}")
-    original = audit(source)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(prefix=f".{target.name}.import-", dir=target.parent))
-    try:
-        (staging / "assets").mkdir()
-        for name in ("catalog.json", "index.html"):
-            shutil.copy2(source / name, staging / name, follow_symlinks=False)
-        for entry in original["files"]:
-            shutil.copy2(source / entry["path"], staging / entry["path"], follow_symlinks=False)
-        copied = audit(staging)
-        if copied != original:
-            raise ValueError("Imported catalog or media differs from the source manifest")
-        os.replace(staging, target)
-    finally:
-        if staging.exists():
-            shutil.rmtree(staging)
-    return {"source": str(source), "target": str(target), **original}

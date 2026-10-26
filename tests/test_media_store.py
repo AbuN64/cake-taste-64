@@ -7,7 +7,7 @@ from pathlib import Path
 
 from cake_taste.media.cli import run
 from cake_taste.media.publish import publish
-from cake_taste.media.store import audit, import_verified
+from cake_taste.media.store import audit
 
 
 class Profile:
@@ -76,43 +76,7 @@ class MediaStoreTest(unittest.TestCase):
             self.assertEqual(report["items"], 1)
             self.assertEqual(report["blobs"], 1)
 
-    def test_one_time_import_preserves_historical_id_catalog_bytes_and_blob(self):
-        with tempfile.TemporaryDirectory() as directory:
-            base = Path(directory)
-            source = base / "old"
-            (source / "assets").mkdir(parents=True)
-            blob = b"\x89PNG\r\n\x1a\nold historical bytes"
-            digest = hashlib.sha256(blob).hexdigest()
-            relative = f"assets/{digest}.png"
-            (source / relative).write_bytes(blob)
-            catalog = {
-                "timezone": "America/Vancouver",
-                "items": [
-                    {
-                        "id": "historical-id",
-                        "file": relative,
-                        "sha256": digest,
-                        "type": "image",
-                        "date": "2026-10-16",
-                        "captured_at": "2026-10-16T10:00:00-07:00",
-                        "title": "Old capture",
-                    }
-                ],
-            }
-            raw = (json.dumps(catalog, indent=2) + "\n").encode()
-            (source / "catalog.json").write_bytes(raw)
-            (source / "index.html").write_text("<h1>Old index</h1>")
-            target = base / "imported"
-            result = import_verified(source, target)
-            self.assertEqual((target / "catalog.json").read_bytes(), raw)
-            self.assertEqual((target / relative).read_bytes(), blob)
-            self.assertEqual(result["catalog_sha256"], hashlib.sha256(raw).hexdigest())
-            self.assertEqual(json.loads((target / "catalog.json").read_text())["items"][0]["id"], "historical-id")
-            self.assertEqual(audit(target)["manifest_sha256"], audit(source)["manifest_sha256"])
-            with self.assertRaises(FileExistsError):
-                import_verified(source, target)
-
-    def test_tampered_or_symlinked_assets_fail_before_import(self):
+    def test_tampered_assets_fail_audit(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             source = base / "capture.ppm"
@@ -124,8 +88,6 @@ class MediaStoreTest(unittest.TestCase):
             blob.write_bytes(b"corrupt")
             with self.assertRaisesRegex(ValueError, "changed media blob"):
                 audit(root)
-            with self.assertRaises(ValueError):
-                import_verified(root, base / "copy")
 
     def test_public_media_cli_uses_profile_root(self):
         with tempfile.TemporaryDirectory() as directory:

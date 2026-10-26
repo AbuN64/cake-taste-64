@@ -7,7 +7,7 @@ from pathlib import Path
 from cake_taste.files import atomic_bytes
 
 from .publish import publish, render_html
-from .store import audit, import_verified
+from .store import audit
 
 
 class Parser(argparse.ArgumentParser):
@@ -30,9 +30,6 @@ def run(profile, argv):
     publishing.add_argument("--description")
     publishing.add_argument("--date")
     publishing.add_argument("--revision")
-    importing = commands.add_parser("import", add_help=False)
-    importing.add_argument("--source", required=True)
-    importing.add_argument("--target", required=True)
     commands.add_parser("render", add_help=False)
     args = parser.parse_args(argv)
     if args.command == "audit":
@@ -50,10 +47,6 @@ def run(profile, argv):
             revision=args.revision,
         )
         return {"action": "publish", **result}
-    if args.command == "import":
-        source = profile.resolve_path(args.source)
-        target = profile.resolve_path(args.target)
-        return {"action": "import", **import_verified(source, target)}
     catalog = json.loads((Path(root) / "catalog.json").read_text())
     page = render_html(
         catalog["items"],
