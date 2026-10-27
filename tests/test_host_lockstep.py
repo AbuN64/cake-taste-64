@@ -94,8 +94,13 @@ class LockstepRecorderTest(unittest.TestCase):
             self.assertEqual(pages[int(hits[0]["pages"][2][1], 16)][:4], bytes.fromhex("11223344"))
             self.assertEqual(pages[int(hits[1]["pages"][0][1], 16)][:1], b"\xab")
             calls = [x for x in lines if x["k"] == "call"]
+            # the first 8 calls each caller makes of a function, whatever the function's running call number
             self.assertEqual([(x["fn"], x["i"]) for x in calls],
-                             [("f", 0), ("g", 0), ("h", 0)] + [("f", i) for i in range(1, 8)])
+                             [("f", 0), ("g", 0), ("h", 0)] + [("f", i) for i in range(1, 10)])
+            self.assertEqual([(x["fn"], x["caller"], x["o"]) for x in calls],
+                             [("f", "?", 0), ("g", "f", 0), ("h", "g", 0), ("f", "?", 1)] +
+                             [("f", "f", o) for o in range(8)])
+            self.assertEqual({x["frame"] for x in calls}, {42})
             self.assertEqual(calls[0]["a"], ["00000001", "00000002", "00000003", "00000004"])
             self.assertEqual(calls[0]["f12"], "3ff8000000000000")
             rets = [x for x in lines if x["k"] == "ret"]

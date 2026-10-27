@@ -377,7 +377,7 @@ hands it each function entry (name, a0-a3, f12, f14, sp) and return (v0, v1, f0)
   (each RDRAM word byte-swapped back); the hash is FNV-1a over little-endian
   64-bit words.
 - `N64R_LOCKSTEP_RAM`: RDRAM bytes hashed (default 0x800000).
-- `N64R_LOCKSTEP_CALLS`: calls recorded per function (default 8).
+- `N64R_LOCKSTEP_CALLS`: calls recorded per caller and function, each with its caller, ordinal and poll frame (default 8).
 - `N64R_LOCKSTEP_WATCH`: an RDRAM address; every change of that word seen at an
   entry or return is a `watch` line naming the function.
 Returns pair with entries by name and stack pointer; frames left above a return

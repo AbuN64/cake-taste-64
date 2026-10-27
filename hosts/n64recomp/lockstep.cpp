@@ -4,8 +4,12 @@
 //     meta  side, ram, page, bytes ("canonical-be"), hash
 //     hit   the first entry of a function: n (point number), fn, thr, vi, sp, pages = [[page, hash], ...] for
 //           every 4 KiB page whose hash changed since the previous point (all pages at the first point)
-//     call  one of the first N64R_LOCKSTEP_CALLS (8) calls of a function: i, a = a0..a3, f12, f14 (raw 64-bit), sp
-//     ret   that call's return: r = v0, v1, f0 (raw 64-bit)
+//     call  one of the first N64R_LOCKSTEP_CALLS (8) calls that each caller makes of a function: i (the function's
+//           running call number), fn, caller (the nearest hooked function on this guest thread's stack, "?" for
+//           none), o (the ordinal among that caller's calls of fn, every call counted), frame (the VI/poll), thr,
+//           a = a0..a3, f12, f14 (raw 64-bit), sp. The port writes the same keys (shim/boot/trace.c), so the two
+//           sides align call by call whatever phase their polls are in.
+//     ret   that call's return: fn, i, r = v0, v1, f0 (raw 64-bit)
 //     watch the word at N64R_LOCKSTEP_WATCH changed between two hooks: at (enter|ret), fn, old, new
 //   pages.bin       each distinct page once: u32 page, u32 0, u64 hash (little-endian), then its 4096 bytes
 // Pages are hashed and stored in canonical byte order (big-endian, as the cartridge-era CPU saw them): RDRAM keeps
@@ -16,6 +20,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -31,7 +36,16 @@ extern "C" uint64_t n64host_golden_frame();
 namespace {
 constexpr uint32_t PAGE = 4096;
 struct Fn { unsigned calls = 0; bool hit = false; };
-struct Frame { const char *name; uint32_t sp; int call; };
+struct Frame { const char *name; uint32_t sp; int64_t call; };
+struct CallerFn {
+    const char *caller, *fn;
+    bool operator==(const CallerFn &o) const { return caller == o.caller && fn == o.fn; }
+};
+struct CallerFnHash {
+    size_t operator()(const CallerFn &k) const {
+        return std::hash<const void *>()(k.caller) * 0x9E3779B97F4A7C15ull ^ std::hash<const void *>()(k.fn);
+    }
+};
 std::mutex lock;
 int log_fd = -1, store_fd = -1;
 uint32_t ram_bytes = 0x800000, max_calls = 8, points = 0, watch_phys = 0, watch_value = 0;
@@ -39,6 +53,8 @@ bool watching = false;
 unsigned watch_lines = 0;
 // Leaked on purpose: guest threads still call in while main returns and static destructors run.
 std::unordered_map<const char *, Fn> &fns = *new std::unordered_map<const char *, Fn>;
+// Calls each caller has made of each function, recorded or not: the call's ordinal.
+std::unordered_map<CallerFn, unsigned, CallerFnHash> &ordinals = *new std::unordered_map<CallerFn, unsigned, CallerFnHash>;
 std::vector<uint64_t> &last = *new std::vector<uint64_t>;
 std::vector<uint8_t> &shadow = *new std::vector<uint8_t>;
 std::unordered_set<uint64_t> &stored = *new std::unordered_set<uint64_t>;
@@ -140,18 +156,22 @@ int n64host_lockstep_on = open_files();
 
 extern "C" void n64host_lockstep_entry(const char *name, const uint8_t *rdram, uint32_t a0, uint32_t a1, uint32_t a2,
                                        uint32_t a3, uint64_t f12, uint64_t f14, uint32_t sp) {
-    int call;
+    int64_t call = -1;
     {
         std::lock_guard<std::mutex> g(lock);
         Fn &f = fns[name];
-        call = f.calls < max_calls ? (int)f.calls : -1;
+        const char *caller = frames.empty() ? nullptr : frames.back().name;
+        const unsigned ordinal = ordinals[{caller, name}]++;
+        if (ordinal < max_calls) call = (int64_t)f.calls;
         f.calls++;
         if (!f.hit) {
             f.hit = true;
             point(name, rdram, sp);
         }
         if (call >= 0)
-            out_line("{\"k\":\"call\",\"fn\":\"" + std::string(name) + "\",\"i\":" + std::to_string(call) + ",\"thr\":" +
+            out_line("{\"k\":\"call\",\"fn\":\"" + std::string(name) + "\",\"i\":" + std::to_string(call) +
+                     ",\"caller\":\"" + (caller ? caller : "?") + "\",\"o\":" + std::to_string(ordinal) +
+                     ",\"frame\":" + std::to_string(n64host_golden_frame()) + ",\"thr\":" +
                      std::to_string(tid()) + ",\"sp\":" + hex32(sp) + ",\"a\":[" + hex32(a0) + "," + hex32(a1) + "," +
                      hex32(a2) + "," + hex32(a3) + "],\"f12\":" + hex64(f12) + ",\"f14\":" + hex64(f14) + "}\n");
         if (watching) watch(name, rdram, "enter");
