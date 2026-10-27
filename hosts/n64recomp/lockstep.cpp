@@ -4,12 +4,14 @@
 //     meta  side, ram, page, bytes ("canonical-be"), hash
 //     hit   the first entry of a function: n (point number), fn, thr, vi, sp, pages = [[page, hash], ...] for
 //           every 4 KiB page whose hash changed since the previous point (all pages at the first point)
-//     call  one of the first N64R_LOCKSTEP_CALLS (8) calls that each caller makes of a function: i (the function's
+//     call  one of the first N64R_LOCKSTEP_CALLS (8) calls that each caller makes of a function, then every call at a power-of-two
+//           ordinal (a ring the port keeps at the same ordinals): i (the function's
 //           running call number), fn, caller (the nearest hooked function on this guest thread's stack, "?" for
 //           none), o (the ordinal among that caller's calls of fn, every call counted), frame (the VI/poll), thr,
 //           a = a0..a3, f12, f14 (raw 64-bit), sp. The port writes the same keys (shim/boot/trace.c), so the two
 //           sides align call by call whatever phase their polls are in.
-//     ret   that call's return: fn, i, r = v0, v1, f0 (raw 64-bit)
+//     ret   that call's return: fn, i, r = v0, v1, f0 (raw 64-bit), m = the 16-word windows the argument registers
+//           a0..a3 point at in RDRAM, read at the return (an RDRAM address inside a window reads pppppppp)
 //     watch the word at N64R_LOCKSTEP_WATCH changed between two hooks: at (enter|ret), fn, old, new
 //   pages.bin       each distinct page once: u32 page, u32 0, u64 hash (little-endian), then its 4096 bytes
 // Pages are hashed and stored in canonical byte order (big-endian, as the cartridge-era CPU saw them): RDRAM keeps
@@ -36,7 +38,7 @@ extern "C" uint64_t n64host_golden_frame();
 namespace {
 constexpr uint32_t PAGE = 4096;
 struct Fn { unsigned calls = 0; bool hit = false; };
-struct Frame { const char *name; uint32_t sp; int64_t call; };
+struct Frame { const char *name; uint32_t sp; int64_t call; uint32_t a[4]; };
 struct CallerFn {
     const char *caller, *fn;
     bool operator==(const CallerFn &o) const { return caller == o.caller && fn == o.fn; }
@@ -75,6 +77,38 @@ std::string hex32(uint32_t v) { char b[16]; std::snprintf(b, sizeof b, "\"%08x\"
 std::string hex64(uint64_t v) { char b[24]; std::snprintf(b, sizeof b, "\"%016llx\"", (unsigned long long)v); return b; }
 uint32_t word(const uint8_t *rdram, uint32_t phys) { uint32_t w; std::memcpy(&w, rdram + phys, 4); return w; }
 
+// The calls of one (caller, function) pair a run keeps: the first max_calls, then every power of two (a ring both sides
+// keep at the same ordinals, so the later calls of a long movie align too; the port's shim/boot/trace.c does the same).
+bool keeps(unsigned ordinal) { return ordinal < max_calls || (ordinal & (ordinal - 1)) == 0; }
+
+// Memory a call leaves its results in: at the return of a recorded call, every argument register holding an aligned
+// address inside RDRAM names a WINDOW-word window, read as the 32-bit values the original's code sees. A word of the
+// window that is itself an RDRAM address reads `pppppppp` (the port's native addresses are not the original's; that it
+// is a pointer is what both sides agree on). Keys are the argument registers a0..a3.
+constexpr uint32_t WINDOW = 16;
+bool in_ram(uint32_t guest, uint32_t bytes) {
+    const uint32_t seg = guest >> 29, phys = guest & 0x1FFFFFFFu;
+    return (seg == 4 || seg == 5) && phys + bytes <= ram_bytes;
+}
+std::string windows(const uint8_t *rdram, const uint32_t *a) {
+    std::string out = "{";
+    const char *sep = "";
+    for (int k = 0; k < 4; k++) {
+        if ((a[k] & 3) || !in_ram(a[k], WINDOW * 4)) continue;
+        out += std::string(sep) + "\"" + std::to_string(k) + "\":\"";
+        sep = ",";
+        for (uint32_t j = 0; j < WINDOW; j++) {
+            const uint32_t w = word(rdram, (a[k] & 0x1FFFFFFFu) + j * 4);
+            char b[12];
+            if (in_ram(w, 1)) std::snprintf(b, sizeof b, "pppppppp");
+            else std::snprintf(b, sizeof b, "%08x", w);
+            out += b;
+        }
+        out += "\"";
+    }
+    return out + "}";
+}
+
 int open_files() {
     const char *dir = std::getenv("N64R_LOCKSTEP_DIR");
     if (!dir || !*dir) return 0;
@@ -98,7 +132,7 @@ int open_files() {
     shadow.assign(ram_bytes, 0);
     char meta[256];
     std::snprintf(meta, sizeof meta, "{\"k\":\"meta\",\"side\":\"oracle\",\"ram\":%u,\"page\":%u,\"bytes\":\"canonical-be\","
-                  "\"hash\":\"fnv1a64-le64\",\"calls\":%u,\"watch\":\"%08x\"}\n", ram_bytes, PAGE, max_calls,
+                  "\"hash\":\"fnv1a64-le64\",\"calls\":%u,\"ring\":\"pow2\",\"window\":%u,\"watch\":\"%08x\"}\n", ram_bytes, PAGE, max_calls, WINDOW,
                   watching ? 0x80000000u + watch_phys : 0u);
     out(log_fd, meta, std::strlen(meta));
     return 1;
@@ -162,7 +196,7 @@ extern "C" void n64host_lockstep_entry(const char *name, const uint8_t *rdram, u
         Fn &f = fns[name];
         const char *caller = frames.empty() ? nullptr : frames.back().name;
         const unsigned ordinal = ordinals[{caller, name}]++;
-        if (ordinal < max_calls) call = (int64_t)f.calls;
+        if (keeps(ordinal)) call = (int64_t)f.calls;
         f.calls++;
         if (!f.hit) {
             f.hit = true;
@@ -176,7 +210,7 @@ extern "C" void n64host_lockstep_entry(const char *name, const uint8_t *rdram, u
                      hex32(a2) + "," + hex32(a3) + "],\"f12\":" + hex64(f12) + ",\"f14\":" + hex64(f14) + "}\n");
         if (watching) watch(name, rdram, "enter");
     }
-    frames.push_back({name, sp, call});
+    frames.push_back({name, sp, call, {a0, a1, a2, a3}});
 }
 
 // sp is the restored stack pointer, equal to the one at entry; frames left above it were tail calls or skipped.
@@ -189,6 +223,7 @@ extern "C" void n64host_lockstep_return(const char *name, const uint8_t *rdram, 
     std::lock_guard<std::mutex> g(lock);
     if (fr.call >= 0)
         out_line("{\"k\":\"ret\",\"fn\":\"" + std::string(name) + "\",\"i\":" + std::to_string(fr.call) + ",\"thr\":" +
-                 std::to_string(tid()) + ",\"r\":[" + hex32(v0) + "," + hex32(v1) + "],\"f0\":" + hex64(f0) + "}\n");
+                 std::to_string(tid()) + ",\"r\":[" + hex32(v0) + "," + hex32(v1) + "],\"f0\":" + hex64(f0) +
+                 ",\"m\":" + windows(rdram, fr.a) + "}\n");
     if (watching) watch(name, rdram, "ret");
 }

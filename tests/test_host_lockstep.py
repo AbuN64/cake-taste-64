@@ -23,10 +23,12 @@ int main() {
     if (!n64host_lockstep_on) return 3;
     uint32_t w = 0x11223344;                       // host-order word: canonical bytes 11 22 33 44
     std::memcpy(rdram + 0x2000, &w, 4);
+    uint32_t ptr = 0x80001000;                     // a pointer word inside the window h's a0 names
+    std::memcpy(rdram + 0x2004, &ptr, 4);
     n64host_lockstep_entry(f, rdram, 1, 2, 3, 4, 0x3ff8000000000000ull, 0, 0x80003f00);
     rdram[0x1000 ^ 3] = 0xAB;                      // byte store at 0x80001000 through the ^3 layout
     n64host_lockstep_entry(g, rdram, 5, 0, 0, 0, 0, 0, 0x80003e00);    // g at f's depth + 1
-    n64host_lockstep_entry(h, rdram, 6, 0, 0, 0, 0, 0, 0x80003e00);    // h tail-called from g: same sp
+    n64host_lockstep_entry(h, rdram, 0x80002000, 0, 0, 0, 0, 0, 0x80003e00);    // h tail-called from g: same sp
     n64host_lockstep_return(h, rdram, 7, 0, 0, 0x80003e00);
     n64host_lockstep_return(f, rdram, 9, 8, 0x4000000000000000ull, 0x80003f00);  // g's frame is dropped
     for (int i = 0; i < 10; i++) n64host_lockstep_entry(f, rdram, (uint32_t)i, 0, 0, 0, 0, 0, 0x80003f00);
@@ -94,12 +96,12 @@ class LockstepRecorderTest(unittest.TestCase):
             self.assertEqual(pages[int(hits[0]["pages"][2][1], 16)][:4], bytes.fromhex("11223344"))
             self.assertEqual(pages[int(hits[1]["pages"][0][1], 16)][:1], b"\xab")
             calls = [x for x in lines if x["k"] == "call"]
-            # the first 8 calls each caller makes of a function, whatever the function's running call number
+            # the first 8 calls each caller makes of a function, then the power-of-two ordinals (8), whatever the call number
             self.assertEqual([(x["fn"], x["i"]) for x in calls],
-                             [("f", 0), ("g", 0), ("h", 0)] + [("f", i) for i in range(1, 10)])
+                             [("f", 0), ("g", 0), ("h", 0)] + [("f", i) for i in range(1, 11)])
             self.assertEqual([(x["fn"], x["caller"], x["o"]) for x in calls],
                              [("f", "?", 0), ("g", "f", 0), ("h", "g", 0), ("f", "?", 1)] +
-                             [("f", "f", o) for o in range(8)])
+                             [("f", "f", o) for o in range(9)])
             self.assertEqual({x["frame"] for x in calls}, {42})
             self.assertEqual(calls[0]["a"], ["00000001", "00000002", "00000003", "00000004"])
             self.assertEqual(calls[0]["f12"], "3ff8000000000000")
@@ -107,6 +109,10 @@ class LockstepRecorderTest(unittest.TestCase):
             self.assertEqual([(x["fn"], x["i"], x["r"]) for x in rets],
                              [("h", 0, ["00000007", "00000000"]), ("f", 0, ["00000009", "00000008"])])
             self.assertEqual(rets[1]["f0"], "4000000000000000")
+            # the memory a0 points at, read at the return: guest words, an in-RAM address as pppppppp
+            self.assertEqual(rets[0]["m"], {"0": "11223344" + "pppppppp" + "00000000" * 14})
+            self.assertEqual(rets[1]["m"], {})
+            self.assertEqual((lines[0]["ring"], lines[0]["window"]), ("pow2", 16))
             watch = [x for x in lines if x["k"] == "watch"]
             self.assertEqual([(x["fn"], x["new"]) for x in watch], [("g", "ab000000")])
             plain = subprocess.run([str(exe)], env={k: v for k, v in env.items() if k != "N64R_LOCKSTEP_DIR"},
