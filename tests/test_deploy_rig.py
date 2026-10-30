@@ -347,6 +347,12 @@ class SuiteScript(unittest.TestCase):
         self.assertTrue(facts["suite-summary"].startswith("0 passed, 1 failed, 0 skipped in "))
         self.assertFalse((self.dest / "suite.txt").exists())
 
+    def test_a_test_printing_without_a_newline_does_not_swallow_the_facts(self):
+        self.write_test("import sys; sys.stdout.write('kept-by-default')")
+        done, facts = self.run_suite(self.commit())
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertTrue(facts["suite-summary"].startswith("1 passed, 0 failed, 0 skipped in "))
+
     def test_the_suite_runs_exactly_the_landed_sha_not_the_branch_tip(self):
         landed = self.sha()
         self.write_test("self.fail('a later commit')")

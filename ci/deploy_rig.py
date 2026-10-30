@@ -146,6 +146,12 @@ sys.path.insert(0, os.path.join(root, "src"))
 PACKAGE = "cake_taste"
 
 
+def emit(line):
+    # a test may leave its own output without a newline: every fact starts on a fresh line
+    sys.stdout.write("\n" + line + "\n")
+    sys.stdout.flush()
+
+
 def imported():
     return sorted({os.path.realpath(m.__file__) for n, m in sys.modules.items()
                    if (n == PACKAGE or n.startswith(PACKAGE + ".")) and getattr(m, "__file__", None)})
@@ -156,7 +162,7 @@ def inside(path):
 
 
 __import__(PACKAGE)
-print("suite-import:", os.path.realpath(sys.modules[PACKAGE].__file__), flush=True)
+emit("suite-import: " + os.path.realpath(sys.modules[PACKAGE].__file__))
 
 
 class Result(unittest.TextTestResult):
@@ -181,13 +187,13 @@ result = runner.run(unittest.defaultTestLoader.discover("tests"))
 seconds = time.monotonic() - start
 outside = [path for path in imported() if not inside(path)]
 if outside:
-    print("suite-import:", outside[0], flush=True)
+    emit("suite-import: " + outside[0])
     sys.exit(3)
 failed = len(result.failures) + len(result.errors) + len(result.unexpectedSuccesses)
 passed = result.testsRun - failed - len(result.skipped)
-print(f"suite-summary: {passed} passed, {failed} failed, {len(result.skipped)} skipped in {seconds:.0f} s")
+emit(f"suite-summary: {passed} passed, {failed} failed, {len(result.skipped)} skipped in {seconds:.0f} s")
 if failed or not passed:
-    print("suite-first-failure:", result.first or f"{passed} tests passed")
+    emit("suite-first-failure: " + (result.first or f"{passed} tests passed"))
     sys.exit(1)
 """
 
