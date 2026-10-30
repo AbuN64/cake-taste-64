@@ -44,6 +44,8 @@ n64host_require_runtime_patch("${_rt_src}"
   "${CMAKE_CURRENT_SOURCE_DIR}/patches/n64modernruntime-thread-queue-remove.diff")
 n64host_require_runtime_patch("${_rt_src}"
   "${CMAKE_CURRENT_SOURCE_DIR}/patches/n64modernruntime-virtual-time.diff" "virtual time")
+n64host_require_runtime_patch("${_rt_src}"
+  "${CMAKE_CURRENT_SOURCE_DIR}/patches/n64modernruntime-thread-context-slab.diff" "thread context slab")
 n64host_require_runtime_patch("${_rt64_src}"
   "${CMAKE_CURRENT_SOURCE_DIR}/patches/rt64-headless-surface.diff" "RT64 headless surface")
 

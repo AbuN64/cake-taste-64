@@ -27,5 +27,6 @@ prepare() {  # name url patch...
   echo "deps: $dir at $pin, patched: $*"
 }
 prepare N64ModernRuntime https://github.com/N64Recomp/N64ModernRuntime \
-  n64modernruntime-thread-queue-remove.diff n64modernruntime-virtual-time.diff
+  n64modernruntime-thread-queue-remove.diff n64modernruntime-virtual-time.diff \
+  n64modernruntime-thread-context-slab.diff
 prepare rt64 https://github.com/rt64/rt64 rt64-acclaim-f3dex2-registration.diff rt64-headless-surface.diff

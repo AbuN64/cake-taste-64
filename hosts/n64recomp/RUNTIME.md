@@ -70,6 +70,11 @@ The CPU tick is the only source of guest time: a host-side call that blocks the 
 thread with no other guest thread runnable would stall the clock (the original idle thread
 spins in guest code, so this does not occur).
 
+Guest memory holds no heap address of the host process: `OSThread::context` is a real host pointer kept at offset
+0x20 of every thread record, so `patches/n64modernruntime-thread-context-slab.diff` constructs the contexts in a slab
+at the fixed address `0x200000000000`, one slot per `osCreateThread`, never reused. Two runs of the same movie
+therefore leave the same bytes in every thread record, and `state-oracle.txt` (`N64R_TAS_STATE_HASH`) is byte-identical.
+
 ## Graphics input lifetime
 
 N64ModernRuntime pin `cdf5abbd5026fef5c364c676e4667c45e42b6863` requires

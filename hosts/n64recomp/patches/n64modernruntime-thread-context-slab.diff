@@ -1,0 +1,68 @@
+diff --git a/ultramodern/src/threads.cpp b/ultramodern/src/threads.cpp
+index 6e3ed18..71d79c0 100644
+--- a/ultramodern/src/threads.cpp
++++ b/ultramodern/src/threads.cpp
+@@ -1,4 +1,7 @@
++#include <atomic>
+ #include <cstdio>
++#include <cstdlib>
++#include <new>
+ #include <thread>
+ #include <cassert>
+ #include <string>
+@@ -9,6 +12,37 @@
+ 
+ #include "ultramodern/threads.hpp"
+ 
++#include <sys/mman.h>
++
++// OSThread::context is a real host pointer stored in guest RDRAM, so a heap address (ASLR, allocator state, which host
++// thread allocated) would make the guest's memory differ between two identical runs. The contexts are constructed in
++// a slab at a fixed address instead, one slot per osCreateThread in creation order (guest thread creation is
++// serialised) and never reused: the same run stores the same pointer. A slab that cannot be mapped there, or that
++// runs out, stops the host.
++static constexpr uintptr_t context_slab_base = 0x200000000000ull;
++static constexpr size_t context_slot_size = (sizeof(UltraThreadContext) + 63) & ~size_t(63);
++static constexpr size_t context_slot_count = 4096;
++static std::atomic<size_t> context_slots_used{0};
++
++static UltraThreadContext* new_thread_context() {
++    static char* const slab = [] {
++        void* want = reinterpret_cast<void*>(context_slab_base);
++        void* got = mmap(want, context_slot_size * context_slot_count, PROT_READ | PROT_WRITE,
++                         MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
++        if (got != want) {
++            fprintf(stderr, "[Thread] cannot map the thread context slab at %p\n", want);
++            abort();
++        }
++        return static_cast<char*>(got);
++    }();
++    size_t slot = context_slots_used.fetch_add(1);
++    if (slot >= context_slot_count) {
++        fprintf(stderr, "[Thread] out of thread context slots (%zu)\n", context_slot_count);
++        abort();
++    }
++    return new (slab + slot * context_slot_size) UltraThreadContext{};
++}
++
+ // Native APIs only used to set thread names for easier debugging
+ #ifdef _WIN32
+ #include <Windows.h>
+@@ -261,7 +295,7 @@ extern "C" void osCreateThread(RDRAM_ARG PTR(OSThread) t_, OSId id, PTR(thread_f
+ 
+     // Spawn a new thread, which will immediately pause itself and wait until it's been started.
+     // Pass the context as an argument to the thread function to ensure that it can't get cleared before the thread captures its value.
+-    UltraThreadContext* context = new UltraThreadContext{};
++    UltraThreadContext* context = new_thread_context();
+     t->context = context;
+     context->host_thread = std::thread{_thread_func, PASS_RDRAM t_, entrypoint, arg, t->context};
+ 
+@@ -353,7 +387,7 @@ void thread_cleaner_func() {
+             debug_printf("[Cleanup] Deleting thread context %p\n", to_delete);
+ 
+             to_delete->host_thread.join();
+-            delete to_delete;
++            to_delete->~UltraThreadContext();
+         }
+     }
+ }

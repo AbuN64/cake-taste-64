@@ -48,3 +48,19 @@ before its first graphics task. The patch is generic and changes no guest code.
 
 `tests/test_runtime_thread_queue.py` applies this patch to the tiny pinned source
 fixture and checks ready and blocked queues, including repeated reprioritization.
+
+# Runtime thread context slab
+
+Pin: `cdf5abbd5026fef5c364c676e4667c45e42b6863`.
+Apply `n64modernruntime-thread-context-slab.diff` in that runtime checkout (it only touches
+`ultramodern/src/threads.cpp`, so it applies before or after the other runtime patches).
+`OSThread::context` is a real host pointer kept in guest RDRAM (offset 0x20 of every OSThread). Allocated with `new`,
+its value follows ASLR and allocator state, so the guest bytes of every thread record (and so the game state the
+oracle samples under `N64R_TAS_STATE`) differed between two identical runs: ENGINE symbols 1455, 1512, 1518, 1604,
+1605 and 1644 of the 2,846-symbol table (`D_800FF230`, `D_801011B8`, `D_801076F8`, `D_8011B590`, `D_8011B7C0`,
+`D_80142928`). The patch constructs the contexts in a slab mapped at the fixed address `0x200000000000`, one slot per
+`osCreateThread`, never reused, so the same run stores the same pointer. A slab that cannot be mapped there, or that
+runs out (4096 threads), stops the host.
+
+`tests/test_runtime_thread_context.py` applies this patch to the pinned `threads.cpp` slice and starts the result
+twice: the stored pointer must be the same in both processes.
