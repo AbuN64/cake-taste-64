@@ -16,7 +16,9 @@ int main(int argc, char **argv) {
     g.lead = std::strtoull(argv[1], nullptr, 10);
     g.every = std::strtoull(argv[2], nullptr, 10);
     if (argc > 4) g.exit_poll = std::strtoull(argv[4], nullptr, 10);
-    for (unsigned long long p = 0; p <= std::strtoull(argv[3], nullptr, 10); p++) if (g.wanted(p)) std::printf("%llu\n", p);
+    const unsigned long long last = std::strtoull(argv[3], nullptr, 10);
+    for (unsigned long long p = 0; p <= last; p++)
+        if (g.wanted(p)) std::printf("%llu\n", p);
     return 0;
 }
 """
