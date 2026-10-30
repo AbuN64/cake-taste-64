@@ -64,13 +64,25 @@ class ThreadContextTests(unittest.TestCase):
                 PRELUDE + helper + f"\nstatic UltraThreadContext* make_context() {{ return {expression}; }}\n" + HARNESS
             )
             subprocess.run(
-                ["c++", "-std=c++20", "-O2", "-Wall", "-Werror", "-pthread", str(root / "t.cpp"), "-o",
-                 str(root / "t")],
-                check=True, capture_output=True,
+                [
+                    "c++",
+                    "-std=c++20",
+                    "-O2",
+                    "-Wall",
+                    "-Werror",
+                    "-pthread",
+                    str(root / "t.cpp"),
+                    "-o",
+                    str(root / "t"),
+                ],
+                check=True,
+                capture_output=True,
             )
             runs = []
             for heap_shift in ("100", "300000"):
-                result = subprocess.run([str(root / "t"), heap_shift], capture_output=True, text=True, timeout=5)
+                result = subprocess.run(
+                    [str(root / "t"), heap_shift], check=False, capture_output=True, text=True, timeout=5
+                )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 runs.append(result.stdout.split())
             return runs
