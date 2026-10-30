@@ -85,6 +85,14 @@ spins in guest code, so this does not occur).
 The port's shim keeps the same clock with the same rule and charge (`N64C_GUEST_NS_PER_ENTRY`, which `tas play`
 takes from `gen/cpu_profile.h`). Its `osContInit` is libultra's: before Count 23437500 (500 ms) it waits on an
 `osSetTimer` for the rest, then makes the SI write and read exchanges as SI completion events, once per boot.
+Its Controller Pak file system (`shim/n64c_pfs.c`) works on the card image natively, so each pfs call charges the
+accessory packets the ROM's libultra pfs sends for it, one Joybus exchange per 32-byte block with the bus time of
+"Raw controller transactions" (64 us write, 576 us read on a talking channel): the id check reads block 1, a bank
+select writes block 0x400, a directory note is one block, an inode page read is 8 blocks then its 8-block backup
+written back, an inode page write is 8 blocks and 8 backups, and a page cleared (allocate) or summed (delete) is a
+bank select, 8 blocks and a bank select. On a formatted one-bank card `osPfsInitPak` is 85 exchanges (status, bank
+select, id, label, `osPfsChecker` 81), `osPfsFileState` of an empty note 2 and `osPfsFreeBlocks` 17, the counts the
+oracle's SI log shows; the oracle runs libultra's pfs itself.
 
 Guest memory holds no heap address of the host process: `OSThread::context` is a real host pointer kept at offset
 0x20 of every thread record, so `patches/n64modernruntime-thread-context-slab.diff` constructs the contexts in a slab
