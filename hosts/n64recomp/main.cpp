@@ -11,7 +11,6 @@
 #include <unistd.h>
 #include <vector>
 #include "host.h"
-#include "cpu_metrics.h"
 #include "host_profile.h"
 #include "boot_profile.h"
 #include "host_input_profile.h"
@@ -23,7 +22,7 @@
 size_t n64host_rom_size;
 
 // ---- probes -------------------------------------------------------------
-extern "C" void n64host_cpu_tick();
+extern "C" void n64host_cpu_tick(int charged);
 extern uint8_t *n64host_rdram;
 extern "C" void n64host_golden_init();
 extern "C" void n64host_golden_vi();
@@ -32,9 +31,8 @@ extern "C" uint64_t n64host_golden_frame();
 extern "C" void n64host_golden_entry(const char *, unsigned);
 extern "C" void n64host_golden_audio(uint32_t, uint32_t, uint32_t);
 extern "C" void n64host_view_vi();
-extern "C" void n64host_trace(const char *name) {
-    host_cpu_metrics.entry();
-    n64host_cpu_tick();
+extern "C" void n64host_trace(const char *name, int charged) {
+    n64host_cpu_tick(charged);
     n64host_golden_entry(name, (unsigned)SDL_GetThreadID(nullptr));
     static FILE *f = [] { const char *p = std::getenv("N64R_TRACE"); FILE *h = p ? std::fopen(p, "w") : nullptr; if (h) setvbuf(h, nullptr, _IOLBF, 0); return h; }();
     if (!f) return;
@@ -48,7 +46,6 @@ extern "C" void n64host_memwatch(unsigned, unsigned, int) {}
 
 // ---- callbacks ----------------------------------------------------------
 RspExitReason rsp_audio(uint8_t* rdram, uint32_t ucode_addr);
-void n64host_cpu_idle_return();
 namespace {
 SDL_Window *g_window;
 void *create_gfx() {
@@ -89,7 +86,7 @@ RspUcodeFunc *get_ucode(const OSTask *task) {
 }
 void message_box(const char *msg) { std::fprintf(stderr, "n64host: %s\n", msg); }
 std::string thread_name(const OSThread *) { return {}; }
-void vi_cb() { host_cpu_vi(osGetCount()); n64host_golden_vi(); n64host_view_vi(); }
+void vi_cb() { n64host_golden_vi(); n64host_view_vi(); }
 void gfx_init_cb() {}
 
 recomp_func_t *find_func(uint32_t vram) {
@@ -217,7 +214,6 @@ int main(int argc, char **argv) {
     cfg.events_callbacks = ev_cb;
     cfg.error_handling_callbacks = err_cb;
     cfg.threads_callbacks = thr_cb;
-    ultramodern::set_vclock_idle_hook(n64host_cpu_idle_return);
     recomp::start_game(u8"host", "");
     recomp::start(cfg);   // runs the gfx loop until quit
     n64host_golden_finish();

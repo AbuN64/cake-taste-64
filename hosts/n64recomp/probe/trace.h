@@ -6,8 +6,9 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-void n64host_trace(const char *name);
-void n64host_cpu_tick(void);
+void n64host_trace(const char *name, int charged);
+void n64host_cpu_tick(int charged);
+int n64host_charged(const char *name);
 extern int n64host_lockstep_on;
 extern int n64host_replay_on;
 void n64host_replay_entry(const char *name, const uint8_t *rdram, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3,
@@ -19,7 +20,9 @@ void n64host_lockstep_return(const char *name, const uint8_t *rdram, uint32_t v0
 #ifdef __cplusplus
 }
 #endif
-#define TRACE_ENTRY() n64host_trace(__func__); \
+// Each call site resolves once whether its function's entry is guest work (RUNTIME.md "Virtual guest time").
+#define TRACE_ENTRY() { static int n64host_site = -1; if (n64host_site < 0) n64host_site = n64host_charged(__func__); \
+    n64host_trace(__func__, n64host_site); } \
     if (n64host_lockstep_on) n64host_lockstep_entry(__func__, rdram, (uint32_t)ctx->r4, (uint32_t)ctx->r5, \
         (uint32_t)ctx->r6, (uint32_t)ctx->r7, ctx->f12.u64, ctx->f14.u64, (uint32_t)ctx->r29); \
     if (n64host_replay_on) n64host_replay_entry(__func__, rdram, (uint32_t)ctx->r4, (uint32_t)ctx->r5, \
@@ -29,5 +32,6 @@ void n64host_lockstep_return(const char *name, const uint8_t *rdram, uint32_t v0
         ctx->f0.u64, (uint32_t)ctx->r29); \
     if (n64host_lockstep_on) n64host_lockstep_return(__func__, rdram, (uint32_t)ctx->r2, (uint32_t)ctx->r3, \
         ctx->f0.u64, (uint32_t)ctx->r29);
-// Backward branch: a guest spin-wait never reaches a function entry, so service interrupts every 1024th pass.
-#define TRACE_LOOP() { static __thread unsigned n64host_spin; if ((++n64host_spin & 1023u) == 0) n64host_cpu_tick(); }
+// Backward branch: a guest spin-wait never reaches a function entry, so service interrupts every 1024th pass; a loop
+// pass is not guest work.
+#define TRACE_LOOP() { static __thread unsigned n64host_spin; if ((++n64host_spin & 1023u) == 0) n64host_cpu_tick(0); }

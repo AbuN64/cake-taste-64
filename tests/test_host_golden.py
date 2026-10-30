@@ -54,7 +54,7 @@ class ViewDocsTest(unittest.TestCase):
         names = set(re.findall(r"getenv\(\"(N64R_[A-Z_]+)\"\)", source))
         self.assertEqual(names, {"N64R_VIEW", "N64R_VIEW_FPS", "N64R_TAS_SHOT_DIR"})
         docs = (HOST / "RUNTIME.md").read_text(encoding="utf-8")
-        for name in names | {"N64R_CLOCK"}:
+        for name in names:
             self.assertIn(f"`{name}`", docs)
 
     def test_shots_never_replace_and_the_view_is_renamed_whole(self):

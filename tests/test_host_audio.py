@@ -46,8 +46,7 @@ extern "C" void n64host_golden_rate(unsigned) {}
 #include "librecomp/game.hpp"
 #include "ultramodern/ultramodern.hpp"
 static int submissions=0;static int closed=0;static bool bad=false;static Uint32 queued=0;
-static bool entries=false;static uint64_t vnow=0;
-bool n64host_entries_clock(){return entries;}
+static uint64_t vnow=0;
 uint64_t ultramodern::vclock_now_ns(){return vnow;}
 void SDL_CloseAudioDevice(SDL_AudioDeviceID){++closed;}
 SDL_AudioDeviceID SDL_OpenAudioDevice(const char*n,int capture,SDL_AudioSpec*w,SDL_AudioSpec*h,int flags){
@@ -64,24 +63,19 @@ int main(int argc,char**){bad=argc>1;
 auto cb=host_audio_callbacks();
 cb.rate(32000);
 int16_t pcm[]={1,-2,3,-4};
-cb.queue(pcm,4);
-assert(queued==8&&cb.remaining()==2);
 recomp_context ctx{};
-__wrap_osAiGetStatus_recomp(nullptr,&ctx);assert(ctx.r2==0x40000000u);
-cb.queue(pcm,4);__wrap_osAiGetStatus_recomp(nullptr,&ctx);assert(ctx.r2==0xc0000000u);
-__wrap_osAiSetNextBuffer_recomp(nullptr,&ctx);assert(ctx.r2==uint64_t(-1)&&submissions==0);
-queued=8;__wrap_osAiGetStatus_recomp(nullptr,&ctx);assert(ctx.r2==0x40000000u);
-queued=0;__wrap_osAiGetStatus_recomp(nullptr,&ctx);assert(ctx.r2==0);
-__wrap_osAiSetNextBuffer_recomp(nullptr,&ctx);assert(ctx.r2==0&&submissions==1);
-cb.rate(44100);
-assert(closed==1);
-// N64R_CLOCK=entries: the FIFO drains in guest time, whatever the device has played.
-entries=true;cb.rate(32000);queued=1000;
+// The FIFO drains in guest time, whatever the device has played: a device holding 1000 bytes changes nothing.
+queued=1000;
 cb.queue(pcm,4);  // 2 frames at 32 kHz: ends at 62500 ns
 __wrap_osAiGetStatus_recomp(nullptr,&ctx);assert(ctx.r2==0x40000000u&&cb.remaining()==2);
 cb.queue(pcm,4);__wrap_osAiGetStatus_recomp(nullptr,&ctx);assert(ctx.r2==0xc0000000u&&cb.remaining()==4);
+__wrap_osAiSetNextBuffer_recomp(nullptr,&ctx);assert(ctx.r2==uint64_t(-1)&&submissions==0);
 vnow=62500;__wrap_osAiGetStatus_recomp(nullptr,&ctx);assert(ctx.r2==0x40000000u&&cb.remaining()==2);
 vnow=125000;__wrap_osAiGetStatus_recomp(nullptr,&ctx);assert(ctx.r2==0&&cb.remaining()==0);
+__wrap_osAiSetNextBuffer_recomp(nullptr,&ctx);assert(ctx.r2==0&&submissions==1);
+cb.rate(44100);
+assert(closed==1);
+cb.rate(32000);cb.queue(pcm,4);cb.queue(pcm,4);
 }
 """)
             binary = p / "test"

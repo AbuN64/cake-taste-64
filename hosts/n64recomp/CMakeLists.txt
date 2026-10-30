@@ -101,11 +101,12 @@ execute_process(COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/boot_p
 execute_process(COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/input_profile.py
   ${N64R_PROFILE} ${CMAKE_BINARY_DIR}/gen/host_input_profile.h COMMAND_ERROR_IS_FATAL ANY)
 execute_process(COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/cpu_profile.py
-  ${N64R_PROFILE} ${CMAKE_BINARY_DIR}/gen/cpu_profile.h COMMAND_ERROR_IS_FATAL ANY)
+  ${N64R_PROFILE} ${CMAKE_BINARY_DIR}/gen/cpu_profile.h ${N64R_GEN_DIR}/symbols.toml ${CMAKE_BINARY_DIR}/gen/cpu_native.h
+  COMMAND_ERROR_IS_FATAL ANY)
 execute_process(COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tlb_profile.py
   ${N64R_PROFILE} ${CMAKE_BINARY_DIR}/gen/tlb_profile.h COMMAND_ERROR_IS_FATAL ANY)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-  ${N64R_PROFILE} ${N64R_REFUSED} ${CMAKE_CURRENT_SOURCE_DIR}/tlb_profile.py ${CMAKE_CURRENT_SOURCE_DIR}/boot_profile.py ${CMAKE_CURRENT_SOURCE_DIR}/input_profile.py ${CMAKE_CURRENT_SOURCE_DIR}/cpu_profile.py)
+  ${N64R_PROFILE} ${N64R_REFUSED} ${N64R_GEN_DIR}/symbols.toml ${CMAKE_CURRENT_SOURCE_DIR}/tlb_profile.py ${CMAKE_CURRENT_SOURCE_DIR}/boot_profile.py ${CMAKE_CURRENT_SOURCE_DIR}/input_profile.py ${CMAKE_CURRENT_SOURCE_DIR}/cpu_profile.py)
 set(NFD_PORTAL ON CACHE BOOL "" FORCE)  # dbus portal; avoids a GTK3 dependency
 set(RT64_STATIC ON CACHE BOOL "" FORCE)
 set(RT64_SDL_WINDOW_VULKAN ON CACHE BOOL "" FORCE)
@@ -115,7 +116,7 @@ add_subdirectory(${_rt64_src} rt64)
 
 file(GLOB GEN_FUNCS CONFIGURE_DEPENDS ${N64R_GEN_DIR}/funcs/*.c)
 add_executable(n64host
-  tlb.c golden.cpp lockstep.cpp replay.cpp fault_adapter.cpp main.cpp render_rt64.cpp audio_sdl.cpp input_sdl.cpp libultra_gaps.c init_adapter.c addrmap.c cop0_adapter.c pi_adapter.cpp vi_adapter.cpp tlb_adapter.c si_adapter.cpp si_timing.cpp queue_trace.cpp cpu_scheduler.cpp cpu_clock.cpp cpu_metrics.cpp view.cpp
+  tlb.c golden.cpp lockstep.cpp replay.cpp fault_adapter.cpp main.cpp render_rt64.cpp audio_sdl.cpp input_sdl.cpp libultra_gaps.c init_adapter.c addrmap.c cop0_adapter.c pi_adapter.cpp vi_adapter.cpp tlb_adapter.c si_adapter.cpp si_timing.cpp queue_trace.cpp cpu_scheduler.cpp view.cpp
   ${CMAKE_BINARY_DIR}/gen/refused_stubs.c
   ${GEN_FUNCS} ${N64R_GEN_DIR}/rsp/rsp_audio.cpp)
 set_source_files_properties(${GEN_FUNCS} PROPERTIES COMPILE_OPTIONS "-w;-O1")

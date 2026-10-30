@@ -56,10 +56,22 @@ a game state. Inspect captured images before accepting front-end or gameplay.
 
 The oracle's clock is virtual (`patches/n64modernruntime-virtual-time.diff`). Count, VI
 retraces, `osSetTimer` timers, SI completion and RSP/graphics task completion are events on one
-virtual clock in nanoseconds. The clock advances only when a guest thread's function-entry
-tick (`cpu_scheduler.cpp`) charges the native thread CPU time it just used, times
-`HOST_NATIVE_CPU_SCALE`; due events run on that guest thread in time order. Wall time and host
-load do not move it, and nothing sleeps to pace the guest.
+virtual clock in nanoseconds. Guest time is a logical work count, never a host clock: it advances only
+when a guest thread enters a charged function, by the fixed `HOST_GUEST_NS_PER_ENTRY` (the fraction carried),
+and due events run on that guest thread in time order. When every guest thread is idle or blocked, the clock
+jumps straight to the next event. Wall time, host CPU time and host load never move it, and nothing sleeps
+or spins to pace the guest, so the same inputs give byte-identical results on any host at any speed.
+
+**Charge rule (contract version 2, both sides).** One tick is one entry of an original game function that both
+the oracle and the port compile from the original program. Code the port runs natively charges nothing on
+either side: the SDK range (libultra, libaudio, libc helpers such as `__udivdi3`, `cpu.native_code`'s first range)
+and the game functions the port binds to native code (its binding manifest; their vrams are the other
+`cpu.native_code` ranges). Function identity is the vram, the key `symbols.toml` and the port's
+`symbol_addrs.txt` share. The oracle resolves each call site once (`n64host_charged`, table `gen/cpu_native.h`
+rendered by `cpu_profile.py` from `${N64R_GEN_DIR}/symbols.toml` and the facts); the port charges exactly the
+`type:func` symbols outside those ranges (`shim/boot/trace.py`, `n64c_trace_charged`). A spin loop's 1024th
+pass and an interrupt restore are service points only: they deliver due interrupts and charge nothing.
+`HOST_GUEST_NS_PER_ENTRY` is the recorded calibration window's VI time over its entries (`cpu.calibration`).
 
 An RSP task completes a fixed guest duration after submission (graphics 8 ms, audio 2 ms,
 hardware-like constants in `events.cpp`), and only once the host has finished the work: if
@@ -70,12 +82,9 @@ The CPU tick is the only source of guest time: a host-side call that blocks the 
 thread with no other guest thread runnable would stall the clock (the original idle thread
 spins in guest code, so this does not occur).
 
-The port's shim keeps the same clock with the same work measure: under `N64R_CLOCK=entries` one tick is one
-function entry of the original game at `HOST_GUEST_NS_PER_ENTRY` (the port reads that value as
-`N64C_GUEST_NS_PER_ENTRY`, which `tas play` takes from `gen/cpu_profile.h`), so oracle and port charge the
-same ns per entry and run VI, timers, SI and RSP completion from it. The loop-pass and interrupt-restore ticks
-are oracle-only; the port has no counterpart, and that difference is the measured residual in the port's
-SHIM-CLOCK result.
+The port's shim keeps the same clock with the same rule and charge (`N64C_GUEST_NS_PER_ENTRY`, which `tas play`
+takes from `gen/cpu_profile.h`). Its `osContInit` is libultra's: before Count 23437500 (500 ms) it waits on an
+`osSetTimer` for the rest, then makes the SI write and read exchanges as SI completion events, once per boot.
 
 Guest memory holds no heap address of the host process: `OSThread::context` is a real host pointer kept at offset
 0x20 of every thread record, so `patches/n64modernruntime-thread-context-slab.diff` constructs the contexts in a slab
@@ -185,57 +194,11 @@ higher-priority guest thread run. Nested `__osDisableInt` / `__osRestoreInt`
 regions defer this added service until interrupts are restored. Runtime SDK
 message operations retain their existing blocking semantics.
 
-The required profile fact `cpu.native_time_scale` defines a diagnostic ratio of
-guest CPU duration to native thread CPU time. Count/VI/timers run on the virtual clock
-that this charge advances (see Virtual guest time); nothing paces the guest in wall time. The
-host charges thread CPU time, never wall time spent blocked or running another guest thread,
-carries the sub-nanosecond remainder, and excludes device events and scheduler work from the
-next charge. CPU-clock failure is fatal.
-
-The scale is an explicit approximation, not an instruction/cycle-accurate model
-or a hardware calibration. Native compiler/CPU and function granularity remain
-limitations for timing-sensitive conclusions. No game-specific branch, address,
-state repair, or guest source mutation is involved. The old experimental
-N64R_CPU_SCALE and N64R_CPU_NOPREEMPT switches are not read.
-
-Apply the maintained runtime thread-queue removal patch before building. The
-idle-until-interrupt experiment is not required and is not part of this host.
-
-
-Canonical acceptance: run `20261018T152220584093Z` used profile scale2.5,
-no function/queue tracing, and the original guest. Graphics tasks advanced
-2308 at90s -> 2908 at110s -> 3800 at140s; all13 checkpoint images differed.
-Viewed90s/102s captures show first-person gameplay, and140s shows the ordinary
-mission-failed results after two deaths. The baseline froze at character
-selection with1767 tasks. Queue removal alone and entry service alone did not
-remove that freeze; both the queue correction and paced guest CPU service are
-needed by this measured route. The full suite passed143 tests.
-
-## Measured CPU budget model
-
-The host reports aggregate guest function entries, charged native thread CPU
-time, VI callback count and unwrapped Count ticks once per 60 callbacks. These
-are workload observations, not original instructions or hardware cycles. Native
-time excludes the pacing/scheduler section; SDK execution and clock-read cost
-can still contribute. Concurrent snapshots can straddle a guest publication.
-
-`cpu_calibrate.py <immutable-host-log> <oracle-facts> <source-run>` selects the
-complete 60-VI window with most native CPU work per VI. The profile stores that
-window, the source run/hash, explicit Count/VI rates, and the full-budget model
-assumption. `cpu_profile.py` derives the scale as nominal Count ticks per entry
-divided by native nanoseconds per entry, converted using Count Hz. Algebraically
-this is `(VI / VI_Hz) / native_CPU_seconds`. Count observations independently
-show the host peripheral cadence; Count Hz cancels in the scale calculation.
-
-This is a **frame-budget model**, not a measurement of R4300 cycle costs or
-original-console utilization. Choosing the busiest sampled window assumes its
-work may consume the entire CPU budget and ignores host scheduling overhead.
-An original-hardware or cycle-model instruction/entry trace is still required
-for hardware calibration. Validate the derived model with an untraced canonical
-scenario and viewed gameplay before accepting its operational value. The retired
-standalone numeric scale is rejected. The current pinned runtime emits only
-60-Hz VI callbacks; the profile generator rejects PAL timing facts rather than silently
-claiming 50-Hz support.
+Guest time is the logical work count of Virtual guest time; this boundary only decides where due interrupts
+are delivered. The work count is an approximation of guest CPU duration, not an instruction/cycle-accurate
+model or a hardware calibration. No game-specific branch, address, state repair, or guest source mutation is
+involved. The current pinned runtime emits only 60-Hz VI callbacks; the profile generator rejects PAL timing
+facts rather than silently claiming 50-Hz support.
 
 ## Mission console and probe context
 
@@ -357,8 +320,7 @@ show up behind it. Empty `req` means no send was paired.
 `N64R_TRACE` lines now carry the VI retrace count in the frame column.
 A `quit` step flushes every file and ends the process with status 0 without runtime
 teardown, which races the running guest threads.
-Recordings under the default CPU-time clock are not bit-reproducible after boot (guest time follows
-measured CPU work), so compare structure, not bytes; `N64R_CLOCK` `entries` (below) makes them reproducible.
+Recordings are bit-reproducible: guest time is the logical work count (Virtual guest time).
 
 ## Headless pictures and the deterministic clock (TAS oracle)
 The TAS page compares the native port with this oracle poll by poll, so the oracle speaks the port's frame protocol
@@ -380,17 +342,6 @@ under `N64R_` names and runs with no display server (no X11, no Wayland composit
   rendered: RT64's render target for that address converted to the RDP's own pixel format (no dither), or guest RDRAM
   when the CPU drew it, scaled bilinearly to 320x240 like the port's pictures. Width and format come from the VI
   registers, the height from the rows the game drew into that colour image (else the VI's estimate).
-- `N64R_CLOCK`: `entries` makes guest time a fixed `HOST_GUEST_NS_PER_ENTRY` per tick (a function entry, a spin loop's
-  1024th pass, an interrupt restore), derived from the same CPU calibration (`cpu_profile.py`), instead of measured
-  thread CPU time; the AI then plays queued samples in guest time too. Guest timing no longer depends on the host,
-  so the same movie gives the same pictures and the same poll/VI trace every run (`cpu` or unset: the CPU-time
-  clock above). Measured on the rig (16 cores, RADV): `pak-continue-legal` 2591 polls / 3611 VIs in 2.85 s wall,
-  two runs byte-identical in all 103 shots and the trace.
-
-## Lockstep recorder
-`lockstep.cpp` is a test instrument for comparing a native port's boot with this
-oracle, off unless `N64R_LOCKSTEP_DIR` is set. The trace probe (`probe/trace.h`)
-hands it each function entry (name, a0-a3, f12, f14, sp) and return (v0, v1, f0).
 - `N64R_LOCKSTEP_DIR`: output directory (created). Receives `lockstep.jsonl`
   (`meta`, then `hit` at the first entry of each function with the 4 KiB pages
   whose hash changed since the previous hit, `call`/`ret` for its first calls,
@@ -418,7 +369,7 @@ thread-local test. A call is written off (`skip`: `interleaved` another thread r
 - `N64R_REPLAY_GAP`: VI retraces between two samples of one function (default 25); samples also differ in a0-a3.
 - `N64R_REPLAY_EVENTS`: accesses one call may make (default 200000).
 - `N64R_REPLAY_RAM`: RDRAM bytes (default 0x800000).
-The recorder only reads: guest time (`N64R_CLOCK=entries`) and the run are unchanged.
+The recorder only reads: guest time and the run are unchanged.
 
 ## Generation facts for a new game
 - `recomp.symbol_names[version]` maps a vram to a runtime name. A value is the name, or
@@ -433,5 +384,5 @@ The recorder only reads: guest time (`N64R_CLOCK=entries`) and the run are uncha
 - Data that decodes as code can make N64Recomp emit C that does not compile (a store to the zero register,
   a branch to a label of another function). The generator refuses those functions like any other.
 - Backward branches carry `TRACE_LOOP()` (trace mode): a guest spin-wait that stays inside one function
-  would never reach a function entry, so interrupts would never be serviced.
+  would never reach a function entry, so interrupts would never be serviced; the pass charges no guest time.
 - `funcs/recomp_decls.h` declares every `<name>_recomp` the generated code calls.

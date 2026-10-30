@@ -18,7 +18,6 @@
 
 extern "C" int n64host_frame_read(uint32_t phys, uint32_t *rgba, uint32_t w, uint32_t h);
 extern "C" bool n64host_render_wanted();
-void n64host_cpu_idle_return();
 
 namespace {
 constexpr uint32_t WIDTH = 320, HEIGHT = 240;
@@ -60,7 +59,6 @@ bool read(std::vector<uint32_t> &pixels) {
     pixels.resize(size_t(WIDTH) * HEIGHT);
     const uint32_t fb = uint32_t(osViGetCurrentFramebuffer());
     const bool ok = fb && n64host_frame_read(fb, pixels.data(), WIDTH, HEIGHT);
-    n64host_cpu_idle_return();  // host work on a guest thread is not guest time
     return ok;
 }
 

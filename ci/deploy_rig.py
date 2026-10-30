@@ -109,7 +109,7 @@ for n in 1 2; do
   mkdir "$out"
   (
     cd "$out"
-    export SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy N64R_CLOCK=entries
+    export SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy
     export N64R_ROM=$HOME/code/ragewars-decomp/roms/baserom.us-rev1.z64 N64R_CONFIG=$HOME/rig-state/tas/oracle/cfg
     export VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json
     export N64R_PAK=on N64R_PADS=1 N64R_TAS_PLAY=$movie N64R_TAS_EXIT_AFTER=300 N64R_VIEW=$out/view.bmp
