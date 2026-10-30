@@ -96,7 +96,8 @@ class LockstepRecorderTest(unittest.TestCase):
             self.assertEqual(pages[int(hits[0]["pages"][2][1], 16)][:4], bytes.fromhex("11223344"))
             self.assertEqual(pages[int(hits[1]["pages"][0][1], 16)][:1], b"\xab")
             calls = [x for x in lines if x["k"] == "call"]
-            # the first 8 calls each caller makes of a function, then the power-of-two ordinals (8), whatever the call number
+            # the first 8 calls each caller makes of a function, then the power-of-two ordinals (8),
+            # whatever the call number
             self.assertEqual([(x["fn"], x["i"]) for x in calls],
                              [("f", 0), ("g", 0), ("h", 0)] + [("f", i) for i in range(1, 11)])
             self.assertEqual([(x["fn"], x["caller"], x["o"]) for x in calls],
