@@ -37,6 +37,10 @@ void n64host_script_key(const char *name);
 extern "C" void n64host_view_shot(uint64_t poll);
 extern "C" void n64host_view_final();
 
+// The guest controller poll the host is in (the port's `polls`): an exported plain global, so the debugger's dprintf
+// that traces an event reads it and prints `EV|FUNC@<poll>|..`, the port's form. Set at the TS_CHECKPOINT (tas_state.h).
+extern "C" volatile unsigned long long n64host_tas_poll = 0;
+
 namespace {
 struct Step { uint64_t vi; std::string kind, arg; };
 struct Entry { const char *name; uint64_t first_vi, count; unsigned thread; };
@@ -259,7 +263,8 @@ extern "C" bool n64host_golden_pad(unsigned channel, uint16_t *buttons, int8_t *
     *buttons = held[0]; *x = held_x[0]; *y = held_y[0];
     ++polls;
     if (const char *t = std::getenv("N64R_TAS_TRACE")) { static FILE *tf = std::fopen(t, "w"); if (tf) { std::fprintf(tf, "%llu %llu\n", (unsigned long long)polls, (unsigned long long)vi_count.load()); std::fflush(tf); } }
-    state_poll(polls);
+    n64host_tas_poll = polls;
+    state_poll(polls);  // TS_CHECKPOINT, the same point the port samples (tas_state.h)
     const bool shot = shot_every && polls % shot_every == 0;
     if (shot && on()) checkpoint("poll-" + std::to_string(polls));
     const uint64_t poll = polls;

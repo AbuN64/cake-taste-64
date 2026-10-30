@@ -319,7 +319,10 @@ unset the host behaves as before. It knows nothing about any game.
 - `N64R_TAS_STATE`: a state spec (`tas_state.h`, the port's `N64C_TAS_STATE` twin). `N64R_TAS_STATE_HASH` (file)
   writes `<poll> <symbol>:<hash> ...` per controller poll; `N64R_TAS_STATE_AT` (P1,P2) with `N64R_TAS_STATE_DIR`
   (dir) writes `state-<poll>.bin` there. The words are read from the word-swizzled RDRAM (`TS_ORACLE`), so the two
-  sides' traces compare: `decomp tas play --oracle` diffs the game state poll by poll.
+  sides' traces compare: `decomp tas play --oracle` diffs the game state poll by poll. Both sides sample at the one
+  checkpoint `TS_CHECKPOINT` (`tas_state.h`: inside the controller poll, counter advanced, before the poll returns to
+  the game). The exported global `n64host_tas_poll` holds that poll, so a debugger `dprintf` on a function prints
+  `EV|FUNC@<poll>|args`, the port's event form; the writers of a change seen at poll N are the events tagged N-1.
 - `N64R_PADS` (1..4, default 1): controllers the guest sees. A movie line then holds that many `BUTTONS X Y` triples
   (pad 1 first), and channel 0's read of a poll advances the movie for every channel; the port's `N64C_PADS` is the twin.
 

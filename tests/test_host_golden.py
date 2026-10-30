@@ -31,6 +31,17 @@ class GoldenDocsTest(unittest.TestCase):
         self.assertIn("n64host_golden_recv", (HOST / "queue_trace.cpp").read_text(encoding="utf-8"))
 
 
+    def test_event_poll_tag_is_set_at_the_state_checkpoint(self):
+        source = (HOST / "golden.cpp").read_text(encoding="utf-8")
+        self.assertIn('extern "C" volatile unsigned long long n64host_tas_poll', source)
+        # the tag is set immediately before the state sample, the one TS_CHECKPOINT both sides share
+        self.assertIn("n64host_tas_poll = polls;\n    state_poll(polls);", source)
+        header = (HOST / "tas_state.h").read_text(encoding="utf-8")
+        self.assertIn('#define TS_CHECKPOINT "poll-entry"', header)
+        docs = (HOST / "RUNTIME.md").read_text(encoding="utf-8")
+        self.assertIn("`n64host_tas_poll`", docs)
+        self.assertIn("EV|FUNC@<poll>|args", docs)
+
     def test_scripted_quit_flushes_then_exits_without_runtime_teardown(self):
         source = (HOST / "golden.cpp").read_text(encoding="utf-8")
         quit_step = source[source.index("void quit(uint64_t now)"):]
