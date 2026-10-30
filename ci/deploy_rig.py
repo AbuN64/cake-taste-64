@@ -2,7 +2,11 @@
 """Deploys the landed CakeTaste64 commit to the rig oracle: `.deploy` runs this after Land, with the landed SHA in
 LANDED_Projects_AbuN64_CakeTaste64. Any refusal or failed step prints one line on stderr and exits 1.
 
-  1. the SHA must be on gitea main (else nothing touches the rig);
+  0. one rig-side flock per repo (~/finish/deploy-taste.lock), taken before anything else and held until
+     the readback ends (or the deploy dies), so deploys of this repo never overlap. Under it gitea main is fetched:
+     when main has moved past the landed SHA to a descendant, main's head is deployed instead and the log says the
+     older deploy deferred; when main is not a descendant of the landed SHA, the deploy refuses;
+  1. the SHA to deploy must be on gitea main (else nothing touches the rig);
   2. when ~/rig-state/tas/live/oracle already points at snaps/oracle-<sha12>-*, nothing is built or swapped;
   3. otherwise n64host is built at the SHA through ~/finish/slot into a new snaps/oracle-<sha12>-<epoch> directory
      (pinned deps copied from ~/src/oracle-deps and patched by hosts/n64recomp/deps.sh), never into an existing one;
@@ -10,10 +14,12 @@ LANDED_Projects_AbuN64_CakeTaste64. Any refusal or failed step prints one line o
      through ~/finish/slot on a clean checkout of exactly SHA with its src first on the import path. The imported
      cake_taste path is printed and must lie inside the checkout. Any failure refuses (one line naming the first
      failing test) with the live link untouched; the summary line, the SHA and the imported path go into the deploy
-     log and into snaps/<name>/suite.txt;
+     log and into snaps/<name>/suite.txt. Each run has its own checkout, log, slots dir and tmp dir, so no state is
+     shared between runs;
   5. the live link is swapped to the new directory by renaming a fresh link over it; previous directories stay;
   6. readback, always: boot-idle runs twice through the live oracle and the two state hashes must be equal."""
 
+import contextlib
 import os
 import re
 import shlex
@@ -22,7 +28,8 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager
 from pathlib import PurePosixPath
 
 ENV = "LANDED_Projects_AbuN64_CakeTaste64"
@@ -36,6 +43,18 @@ SNAP = re.compile(r"(?:.*/)?oracle-([0-9a-f]{12})-\d+")
 
 # ssh(command) runs one shell line on the rig and git(args) runs git here; both return (exit code, output).
 Seam = Callable[..., "tuple[int, str]"]
+Lock = Callable[[], AbstractContextManager[list[str]]]  # rig_lock(): holds the flock for its with-block
+
+# The per-repo rig lock: one ssh session takes the flock on its file and holds it while its stdin stays open, so the
+# lock lives exactly as long as the deploy (a killed deploy closes the pipe and frees it). It prints `waiting` when
+# another deploy holds the lock and `locked` once this one has it.
+LOCK = "deploy-taste.lock"
+HOLD = r"""exec 7>>"$HOME/finish/$1" || exit 9
+flock -n 7 || echo waiting
+flock 7 || exit 9
+echo locked
+exec cat
+"""
 
 # build SHA SNAP_NAME: the new directory holds the source, copied deps and build tree only while it builds.
 BUILD = r"""set -eu
@@ -111,7 +130,7 @@ SUITE = r"""set -u
 sha=$1 url=$2 py=$3 dest=$4
 work=$(mktemp -d "$HOME/finish/DEPLOY-SUITE.XXXXXX") || exit 9
 trap 'rm -rf "$work"' EXIT
-log=$HOME/finish/deploy-suite-${sha:0:12}.log
+log=$(mktemp "$HOME/finish/deploy-suite-${sha:0:12}.XXXXXX.log") || exit 9
 git -c init.templateDir= init -q "$work/checkout" || exit 9
 cd "$work/checkout" || exit 9
 git fetch -q "$url" main || { echo "suite-error: cannot fetch main from $url" >&2; exit 9; }
@@ -220,6 +239,31 @@ def suite_command(sha: str, python: str, dest: str, url: str = GITEA) -> str:
     return f"~/finish/slot bash -c {script} suite {sha} {url} {python} {dest}"
 
 
+@contextlib.contextmanager
+def rig_lock() -> Iterator[list[str]]:
+    """Holds the rig flock for the with-block; yields the log lines about the wait (empty when the lock was free)."""
+    holder = subprocess.Popen(
+        ["ssh", "-o", "BatchMode=yes", RIG, f"bash -c {shlex.quote(HOLD)} hold {LOCK}"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    notes = []
+    try:
+        for line in holder.stdout:
+            if line.strip() == "locked":
+                break
+            if line.strip() == "waiting":
+                notes.append(f"another deploy holds ~/finish/{LOCK}, waiting for it")
+        else:
+            raise Refused(f"cannot take ~/finish/{LOCK} on the rig (ssh exit {holder.wait()})")
+        yield notes
+    finally:
+        holder.stdin.close()  # the rig side reads its stdin until EOF, then exits and frees the lock
+        holder.wait()
+
+
 def landed_sha(environ: dict[str, str]) -> str:
     sha = environ.get(ENV, "")
     if not SHA.fullmatch(sha):
@@ -231,8 +275,8 @@ def last_line(text: str, default: object) -> str:
     return text.splitlines()[-1] if text else str(default)
 
 
-def check_on_main(sha: str, git: Seam) -> None:
-    """Refuse unless sha is an ancestor of main on gitea (fetched into a scratch bare repo)."""
+def newest_main(sha: str, git: Seam) -> str:
+    """The SHA to deploy: gitea main's head when it descends from sha (sha itself when it is the head), else Refused."""
     work = tempfile.mkdtemp(prefix="deploy-rig-")
     try:
         git("-C", work, "init", "-q", "--bare")
@@ -241,6 +285,8 @@ def check_on_main(sha: str, git: Seam) -> None:
             raise Refused(f"cannot fetch gitea main ({GITEA}): {last_line(out, code)}")
         if git("-C", work, "merge-base", "--is-ancestor", sha, "FETCH_HEAD")[0]:
             raise Refused(f"{sha[:12]} is not on gitea main")
+        code, out = git("-C", work, "rev-parse", "FETCH_HEAD")
+        return out if code == 0 and SHA.fullmatch(out) else sha
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -311,11 +357,21 @@ def suite(sha: str, dest: str, ssh: Seam) -> list[str]:
     ]
 
 
-def deploy(sha: str, ssh: Seam, git: Seam, now: Callable[[], float] = time.time) -> list[str]:
-    """The whole mechanism; returns the log lines to print, the readback last. Raises Refused on the first failure."""
-    check_on_main(sha, git)
+def deploy(sha: str, ssh: Seam, git: Seam, lock: Lock, now: Callable[[], float] = time.time) -> list[str]:
+    """Takes the rig lock, then deploys the newest landed main; returns the log lines to print, the readback last."""
+    with lock() as waited:
+        return [*waited, *deploy_locked(sha, ssh, git, now)]
+
+
+def deploy_locked(sha: str, ssh: Seam, git: Seam, now: Callable[[], float]) -> list[str]:
+    """The mechanism under the lock. Raises Refused on the first failure."""
+    lines = []
+    head = newest_main(sha, git)
+    if head != sha:
+        lines.append(f"{sha[:12]}: main has moved to {head[:12]}, deploying main's head; the older deploy deferred")
+        sha = head
     before = read_live(ssh)
-    lines = [f"live oracle before: {before}"]
+    lines.append(f"live oracle before: {before}")
     match = SNAP.fullmatch(before)
     if match and match.group(1) == sha[:12]:
         lines.append(f"{sha[:12]}: the live oracle already reads {before}, build and swap skipped")
@@ -332,7 +388,7 @@ def deploy(sha: str, ssh: Seam, git: Seam, now: Callable[[], float] = time.time)
 
 def main(environ: dict[str, str] | None = None) -> int:
     try:
-        for line in deploy(landed_sha(dict(os.environ) if environ is None else environ), ssh, git):
+        for line in deploy(landed_sha(dict(os.environ) if environ is None else environ), ssh, git, rig_lock):
             print(line, flush=True)
     except Refused as refusal:
         print(f"deploy refused: {refusal}", file=sys.stderr)

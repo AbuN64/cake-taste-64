@@ -3,12 +3,14 @@ live link, the no-op path and the boot-idle readback, all through fake ssh and g
 
 import importlib.util
 import os
+import re
 import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path, PurePosixPath
 
@@ -26,16 +28,43 @@ HASH = "63576cbe05149fa7"
 
 
 class FakeGit:
-    def __init__(self, fetch_code=0, ancestor_code=0):
-        self.fetch_code, self.ancestor_code, self.calls = fetch_code, ancestor_code, []
+    def __init__(self, fetch_code=0, ancestor_code=0, head=None, events=None):
+        self.fetch_code, self.ancestor_code, self.head, self.calls = fetch_code, ancestor_code, head, []
+        self.events = events
 
     def __call__(self, *args):
+        if self.events is not None:
+            self.events.append("git")
+        return self.answer(*args)
+
+    def answer(self, *args):
         self.calls.append(args)
+        if "rev-parse" in args:
+            return 0, self.head or ""
         if "fetch" in args:
             return self.fetch_code, "fetch failed" if self.fetch_code else ""
         if "merge-base" in args:
             return self.ancestor_code, ""
         return 0, ""
+
+
+class FakeLock:
+    """The rig lock seam: records `lock` and `unlock` in `events` (shared with the fake rig to prove ordering)."""
+
+    def __init__(self, events=None, notes=()):
+        self.events = [] if events is None else events
+        self.notes = list(notes)
+
+    def __call__(self):
+        return self
+
+    def __enter__(self):
+        self.events.append("lock")
+        return list(self.notes)
+
+    def __exit__(self, *exc):
+        self.events.append("unlock")
+        return False
 
 
 CHECKOUT = "/home/abu/finish/DEPLOY-SUITE.AbCdEf/checkout"
@@ -54,21 +83,28 @@ def suite_output(sha=SHA, imported=f"{CHECKOUT}/src/cake_taste/__init__.py", fai
 class FakeRig:
     """Answers the five kinds of rig command and records every command in order."""
 
-    def __init__(self, live=OLD, hashes=(HASH, HASH), build_code=0, readback_code=0, suite_code=0, suite_out=None):
+    def __init__(
+        self, live=OLD, hashes=(HASH, HASH), build_code=0, readback_code=0, suite_code=0, suite_out=None, events=None
+    ):
+        self.events = events
         self.live, self.hashes, self.build_code, self.readback_code = live, hashes, build_code, readback_code
         self.suite_code, self.suite_out = suite_code, suite_out
         self.commands = []
 
     def __call__(self, command):
         self.commands.append(command)
+        if self.events is not None:
+            self.events.append("ssh")
         if command.startswith("readlink "):
             return 0, self.live
-        if " build " in command and "mkdir \"$new\"" in command:
+        if " build " in command and 'mkdir "$new"' in command:
             return self.build_code, "" if not self.build_code else "boom"
         if " suite " in command and "DEPLOY-SUITE" in command:
             if self.suite_out is not None:
                 return self.suite_code, self.suite_out
-            return self.suite_code, suite_output(failed="tests.test_x.Case.test_y" if self.suite_code else None)
+            sha = re.search(r" suite ([0-9a-f]{40}) ", command).group(1)
+            failed = "tests.test_x.Case.test_y" if self.suite_code else None
+            return self.suite_code, suite_output(sha=sha, failed=failed)
         if "tail -n 3" in command:
             return 0, "ninja: build stopped"
         if " swap " in command:
@@ -80,8 +116,17 @@ class FakeRig:
 
     def kinds(self):
         return [
-            "readlink" if c.startswith("readlink") else "build" if " build " in c else "swap" if " swap " in c
-            else "suite" if "DEPLOY-SUITE" in c else "readback" if "state-oracle" in c else "tail"
+            "readlink"
+            if c.startswith("readlink")
+            else "build"
+            if " build " in c
+            else "swap"
+            if " swap " in c
+            else "suite"
+            if "DEPLOY-SUITE" in c
+            else "readback"
+            if "state-oracle" in c
+            else "tail"
             for c in self.commands
         ]
 
@@ -103,13 +148,14 @@ class DeployShape(unittest.TestCase):
 class Refusals(unittest.TestCase):
     def run_main(self, environ):
         calls = []
-        old = deploy_rig.ssh, deploy_rig.git
+        old = deploy_rig.ssh, deploy_rig.git, deploy_rig.rig_lock
         deploy_rig.ssh = lambda c: calls.append(c) or (0, "")
         deploy_rig.git = lambda *a: calls.append(a) or (0, "")
+        deploy_rig.rig_lock = FakeLock()
         try:
             return deploy_rig.main(environ), calls
         finally:
-            deploy_rig.ssh, deploy_rig.git = old
+            deploy_rig.ssh, deploy_rig.git, deploy_rig.rig_lock = old
 
     def test_unset_or_malformed_sha_refuses_before_any_seam(self):
         for environ in ({}, {deploy_rig.ENV: "abc123"}, {deploy_rig.ENV: SHA.upper()}):
@@ -127,30 +173,31 @@ class Refusals(unittest.TestCase):
     def test_sha_not_on_gitea_main_refuses_without_touching_the_rig(self):
         rig = FakeRig()
         with self.assertRaisesRegex(deploy_rig.Refused, "not on gitea main"):
-            deploy_rig.deploy(SHA, rig, FakeGit(ancestor_code=1))
+            deploy_rig.deploy(SHA, rig, FakeGit(ancestor_code=1), FakeLock())
         self.assertEqual(rig.commands, [])
 
     def test_unreachable_gitea_refuses_without_touching_the_rig(self):
         rig = FakeRig()
         with self.assertRaisesRegex(deploy_rig.Refused, "cannot fetch gitea main"):
-            deploy_rig.deploy(SHA, rig, FakeGit(fetch_code=128))
+            deploy_rig.deploy(SHA, rig, FakeGit(fetch_code=128), FakeLock())
         self.assertEqual(rig.commands, [])
 
     def test_refusal_is_one_stderr_line_exit_1(self):
-        old = deploy_rig.ssh, deploy_rig.git
+        old = deploy_rig.ssh, deploy_rig.git, deploy_rig.rig_lock
         deploy_rig.ssh, deploy_rig.git = FakeRig(), FakeGit(ancestor_code=1)
+        deploy_rig.rig_lock = FakeLock()
         try:
             err = StringIO()
             with redirect_stderr(err):
                 code = deploy_rig.main({deploy_rig.ENV: SHA})
         finally:
-            deploy_rig.ssh, deploy_rig.git = old
+            deploy_rig.ssh, deploy_rig.git, deploy_rig.rig_lock = old
         self.assertEqual((code, len(err.getvalue().splitlines())), (1, 1))
 
 
 class Deploy(unittest.TestCase):
     def deploy(self, rig, git=None):
-        return deploy_rig.deploy(SHA, rig, git or FakeGit(), now=lambda: 1793400000.9)
+        return deploy_rig.deploy(SHA, rig, git or FakeGit(), FakeLock(), now=lambda: 1793400000.9)
 
     def test_builds_a_new_directory_and_swaps_atomically_keeping_the_old(self):
         rig = FakeRig()
@@ -210,7 +257,7 @@ class SuiteGate(unittest.TestCase):
     """The full suite at exactly the landed SHA, between the build and the swap."""
 
     def deploy(self, rig):
-        return deploy_rig.deploy(SHA, rig, FakeGit(), now=lambda: 1793400000.9)
+        return deploy_rig.deploy(SHA, rig, FakeGit(), FakeLock(), now=lambda: 1793400000.9)
 
     def test_a_failing_suite_refuses_naming_the_first_failing_test_and_keeps_the_old_live_build(self):
         rig = FakeRig(suite_code=1)
@@ -224,13 +271,14 @@ class SuiteGate(unittest.TestCase):
 
     def test_main_exits_1_with_one_stderr_line_and_no_swap_on_a_failing_suite(self):
         rig, err = FakeRig(suite_code=1), StringIO()
-        old = deploy_rig.ssh, deploy_rig.git
+        old = deploy_rig.ssh, deploy_rig.git, deploy_rig.rig_lock
         deploy_rig.ssh, deploy_rig.git = rig, FakeGit()
+        deploy_rig.rig_lock = FakeLock()
         try:
             with redirect_stderr(err):
                 code = deploy_rig.main({deploy_rig.ENV: SHA})
         finally:
-            deploy_rig.ssh, deploy_rig.git = old
+            deploy_rig.ssh, deploy_rig.git, deploy_rig.rig_lock = old
         self.assertEqual((code, len(err.getvalue().splitlines()), rig.live), (1, 1, OLD))
         self.assertNotIn("swap", rig.kinds())
 
@@ -322,7 +370,9 @@ class SuiteScript(unittest.TestCase):
         done = subprocess.run(
             ["bash", "-c", command],
             env={"PATH": os.environ["PATH"], "HOME": str(self.home), **(env or {})},
-            capture_output=True, text=True, check=False,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         return done, deploy_rig.suite_facts(done.stdout)
 
@@ -372,6 +422,176 @@ class SuiteScript(unittest.TestCase):
         done, facts = self.run_suite(self.sha(), env={"PYTHONPATH": str(installed.parent)})
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertTrue(PurePosixPath(facts["suite-import"]).is_relative_to(facts["suite-checkout"]))
+
+
+NEWER = "ddddddddddddeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+
+
+class Serialized(unittest.TestCase):
+    """One rig lock per deploy: taken before any seam, held through the readback, freed on every ending."""
+
+    def test_the_lock_wraps_every_git_and_ssh_call_from_the_first_to_the_readback(self):
+        lock = FakeLock()
+        rig, git = FakeRig(events=lock.events), FakeGit(events=lock.events)
+        deploy_rig.deploy(SHA, rig, git, lock, now=lambda: 1793400000.9)
+        self.assertEqual(lock.events[0], "lock")
+        self.assertEqual(lock.events[-1], "unlock")
+        self.assertEqual(lock.events.count("lock") + lock.events.count("unlock"), 2)
+        self.assertEqual(rig.kinds()[-1], "readback")
+
+    def test_the_lock_is_freed_when_the_deploy_refuses(self):
+        lock = FakeLock()
+        with self.assertRaises(deploy_rig.Refused):
+            deploy_rig.deploy(SHA, FakeRig(suite_code=1), FakeGit(), lock, now=lambda: 1793400000.9)
+        self.assertEqual(lock.events[-1], "unlock")
+
+    def test_the_wait_note_leads_the_log(self):
+        lines = deploy_rig.deploy(
+            SHA, FakeRig(), FakeGit(), FakeLock(notes=["another deploy holds it"]), now=lambda: 1793400000.9
+        )
+        self.assertEqual(lines[0], "another deploy holds it")
+
+    def test_two_deploys_through_one_lock_never_interleave_and_the_second_skips(self):
+        mutex, events, rig = threading.Lock(), [], FakeRig()
+        names = {}
+
+        class Shared(FakeLock):
+            def __enter__(self):
+                mutex.acquire()
+                events.append(("lock", threading.current_thread().name))
+                return []
+
+            def __exit__(self, *exc):
+                events.append(("unlock", threading.current_thread().name))
+                mutex.release()
+                return False
+
+        def seam(kind, inner):
+            def call(*args):
+                events.append((kind, threading.current_thread().name))
+                return inner(*args)
+
+            return call
+
+        def work():
+            names[threading.current_thread().name] = deploy_rig.deploy(
+                SHA, seam("ssh", rig), seam("git", FakeGit()), Shared(), now=lambda: 1793400000.9
+            )
+
+        threads = [threading.Thread(target=work, name=n) for n in ("a", "b")]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        first = events[0][1]
+        held = [who for _, who in events[: events.index(("unlock", first))]]
+        self.assertEqual(set(held), {first})
+        self.assertEqual(sum(1 for c in rig.commands if " build " in c), 1)
+        self.assertTrue(any("build and swap skipped" in line for lines in names.values() for line in lines))
+
+    def test_main_takes_the_rig_lock_seam(self):
+        lock = FakeLock()
+        old = deploy_rig.ssh, deploy_rig.git, deploy_rig.rig_lock
+        deploy_rig.ssh, deploy_rig.git, deploy_rig.rig_lock = FakeRig(events=lock.events), FakeGit(), lock
+        try:
+            with redirect_stdout(StringIO()):
+                code = deploy_rig.main({deploy_rig.ENV: SHA})
+        finally:
+            deploy_rig.ssh, deploy_rig.git, deploy_rig.rig_lock = old
+        self.assertEqual((code, lock.events[0], lock.events[-1]), (0, "lock", "unlock"))
+
+    def test_the_hold_script_parses_and_prints_waiting_then_locked(self):
+        self.assertEqual(subprocess.run(["bash", "-n"], input=deploy_rig.HOLD, text=True, check=False).returncode, 0)
+        self.assertLess(deploy_rig.HOLD.index("waiting"), deploy_rig.HOLD.index("locked"))
+        self.assertIn("flock 7", deploy_rig.HOLD)
+        self.assertEqual(deploy_rig.LOCK, "deploy-taste.lock")
+
+
+class Promotion(unittest.TestCase):
+    """Under the lock the deploy builds the newest landed main, never an older one."""
+
+    def test_a_descendant_main_head_is_built_instead_and_the_log_says_the_older_deploy_deferred(self):
+        rig = FakeRig()
+        lines = deploy_rig.deploy(SHA, rig, FakeGit(head=NEWER), FakeLock(), now=lambda: 1793400000.9)
+        build = next(c for c in rig.commands if " build " in c)
+        self.assertIn(f" build {NEWER} oracle-{NEWER[:12]}-1793400000 ", build)
+        self.assertNotIn(SHA, " ".join(rig.commands))
+        moved = f"{SHA[:12]}: main has moved to {NEWER[:12]}, deploying main's head; the older deploy deferred"
+        self.assertIn(moved, lines)
+        self.assertEqual(rig.live, f"snaps/oracle-{NEWER[:12]}-1793400000")
+
+    def test_an_older_deploy_after_the_newer_one_ends_on_the_newer_directory_without_a_build(self):
+        rig = FakeRig(live=f"snaps/oracle-{NEWER[:12]}-1793400000")
+        lines = deploy_rig.deploy(SHA, rig, FakeGit(head=NEWER), FakeLock(), now=lambda: 1793400999.9)
+        self.assertEqual([c for c in rig.commands if " build " in c], [])
+        self.assertEqual(rig.live, f"snaps/oracle-{NEWER[:12]}-1793400000")
+        self.assertTrue(any("deferred" in line for line in lines))
+
+    def test_the_head_itself_is_deployed_without_a_promotion_line(self):
+        lines = deploy_rig.deploy(SHA, FakeRig(), FakeGit(head=SHA), FakeLock(), now=lambda: 1793400000.9)
+        self.assertFalse(any("deferred" in line for line in lines))
+
+    def test_a_main_that_is_not_a_descendant_refuses_and_touches_no_rig_command(self):
+        rig = FakeRig()
+        with self.assertRaisesRegex(deploy_rig.Refused, "not on gitea main"):
+            deploy_rig.deploy(SHA, rig, FakeGit(head=NEWER, ancestor_code=1), FakeLock())
+        self.assertEqual(rig.commands, [])
+
+
+SUITE_REPO_FILES = {
+    "src/cake_taste/__init__.py": "",
+    "tests/test_ok.py": "import unittest\n\n\nclass T(unittest.TestCase):\n    def test_ok(self):\n        pass\n",
+}
+
+
+class SuiteIsolation(unittest.TestCase):
+    """Two suite runs of the same SHA at once (the real SUITE script and runner) each import only their own checkout."""
+
+    def test_concurrent_runs_of_one_sha_use_their_own_checkout_log_and_slots(self):
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as tmp:
+            tmp = Path(tmp)
+            (tmp / "home/finish").mkdir(parents=True)
+            repo = tmp / "repo"
+            for name, body in SUITE_REPO_FILES.items():
+                (repo / name).parent.mkdir(parents=True, exist_ok=True)
+                (repo / name).write_text(body)
+            git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t"]
+            subprocess.run(["git", "-c", "init.templateDir=", "init", "-q", "-b", "main", str(repo)], check=True)
+            subprocess.run([*git, "add", "-A"], check=True)
+            subprocess.run([*git, "commit", "-q", "-m", "x"], check=True)
+            sha = subprocess.run([*git, "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+            script = deploy_rig.SUITE.replace("__RUNNER__", deploy_rig.RUNNER)
+            procs = []
+            for n in (1, 2):
+                dest = tmp / f"dest{n}"
+                dest.mkdir()
+                procs.append(
+                    subprocess.Popen(
+                        ["bash", "-c", script, "suite", sha, str(repo), sys.executable, str(dest)],
+                        env={**os.environ, "HOME": str(tmp / "home")},
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                    )
+                )
+            facts = []
+            for proc in procs:
+                out = proc.communicate()[0]
+                self.assertEqual(proc.returncode, 0, out)
+                facts.append(deploy_rig.suite_facts(out))
+            for fact in facts:
+                self.assertTrue(PurePosixPath(fact["suite-import"]).is_relative_to(fact["suite-checkout"]), fact)
+            self.assertNotEqual(facts[0]["suite-checkout"], facts[1]["suite-checkout"])
+            self.assertNotEqual(facts[0]["suite-log"], facts[1]["suite-log"])
+            for fact in facts:
+                self.assertIn(fact["suite-checkout"], Path(fact["suite-log"]).read_text())
+
+    def test_the_suite_script_names_no_path_that_two_runs_of_one_sha_share(self):
+        self.assertNotIn(".log\n", deploy_rig.SUITE.replace('.XXXXXX.log")', ""))
+        self.assertIn('log=$(mktemp "$HOME/finish/deploy-suite-', deploy_rig.SUITE)
+        self.assertIn("ABU_SLOTS_DIR=$(mktemp -d", deploy_rig.SUITE)
+        self.assertIn("TMPDIR=$PWD/.tmp", deploy_rig.SUITE)
+        self.assertIn("PYTHONPATH=$PWD/src", deploy_rig.SUITE)
 
 
 if __name__ == "__main__":
