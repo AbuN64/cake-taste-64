@@ -6,10 +6,11 @@ import os
 import stat
 import subprocess
 import sys
+import tempfile
 import unittest
 from contextlib import redirect_stderr
 from io import StringIO
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "ci/deploy_rig.py"
@@ -37,11 +38,25 @@ class FakeGit:
         return 0, ""
 
 
-class FakeRig:
-    """Answers the four kinds of rig command and records every command in order."""
+CHECKOUT = "/home/abu/finish/DEPLOY-SUITE.AbCdEf/checkout"
+SUMMARY = "1767 passed, 0 failed, 5 skipped in 204 s"
 
-    def __init__(self, live=OLD, hashes=(HASH, HASH), build_code=0, readback_code=0):
+
+def suite_output(sha=SHA, imported=f"{CHECKOUT}/src/cake_taste/__init__.py", failed=None):
+    lines = [f"suite-checkout: {CHECKOUT}", f"suite-sha: {sha}", f"suite-import: {imported}"]
+    if failed:
+        lines += ["suite-summary: 1766 passed, 1 failed, 5 skipped in 204 s", f"suite-first-failure: {failed}"]
+    else:
+        lines.append(f"suite-summary: {SUMMARY}")
+    return "\n".join([*lines, "suite-log: /home/abu/finish/deploy-suite-7a6ab5ce4712.log"])
+
+
+class FakeRig:
+    """Answers the five kinds of rig command and records every command in order."""
+
+    def __init__(self, live=OLD, hashes=(HASH, HASH), build_code=0, readback_code=0, suite_code=0, suite_out=None):
         self.live, self.hashes, self.build_code, self.readback_code = live, hashes, build_code, readback_code
+        self.suite_code, self.suite_out = suite_code, suite_out
         self.commands = []
 
     def __call__(self, command):
@@ -50,6 +65,10 @@ class FakeRig:
             return 0, self.live
         if " build " in command and "mkdir \"$new\"" in command:
             return self.build_code, "" if not self.build_code else "boom"
+        if " suite " in command and "DEPLOY-SUITE" in command:
+            if self.suite_out is not None:
+                return self.suite_code, self.suite_out
+            return self.suite_code, suite_output(failed="tests.test_x.Case.test_y" if self.suite_code else None)
         if "tail -n 3" in command:
             return 0, "ninja: build stopped"
         if " swap " in command:
@@ -62,7 +81,7 @@ class FakeRig:
     def kinds(self):
         return [
             "readlink" if c.startswith("readlink") else "build" if " build " in c else "swap" if " swap " in c
-            else "readback" if "state-oracle" in c else "tail"
+            else "suite" if "DEPLOY-SUITE" in c else "readback" if "state-oracle" in c else "tail"
             for c in self.commands
         ]
 
@@ -77,7 +96,7 @@ class DeployShape(unittest.TestCase):
         self.assertTrue((ROOT / text.strip()).read_text().startswith("#!/usr/bin/env python3\n"))
 
     def test_remote_scripts_parse(self):
-        for body in (deploy_rig.BUILD, deploy_rig.SWAP, deploy_rig.READBACK):
+        for body in (deploy_rig.BUILD, deploy_rig.SWAP, deploy_rig.READBACK, deploy_rig.SUITE):
             self.assertEqual(subprocess.run(["bash", "-n"], input=body, text=True, check=False).returncode, 0)
 
 
@@ -136,7 +155,7 @@ class Deploy(unittest.TestCase):
     def test_builds_a_new_directory_and_swaps_atomically_keeping_the_old(self):
         rig = FakeRig()
         lines = self.deploy(rig)
-        self.assertEqual(rig.kinds(), ["readlink", "build", "swap", "readlink", "readback"])
+        self.assertEqual(rig.kinds(), ["readlink", "build", "suite", "swap", "readlink", "readback"])
         build = rig.commands[1]
         self.assertTrue(build.endswith(f" build {SHA} {NEW} {deploy_rig.GITEA}"))
         self.assertNotIn("a9afb02e6e33", build)
@@ -145,20 +164,21 @@ class Deploy(unittest.TestCase):
         self.assertIn('"$HOME/finish/slot" nice -n 19 cmake --build', body)
         self.assertIn("rm -rf src deps build", body)
         self.assertNotRegex(body, r"rm -rf [^s]")  # only its own scratch inside the new directory is removed
-        swap = rig.commands[2]
+        swap = rig.commands[3]
         self.assertIn(f" swap {NEW}", swap)
         self.assertIn('ln -sfn "snaps/$1" "$live/.oracle.new"', deploy_rig.SWAP)
         self.assertIn('mv -T "$live/.oracle.new" "$live/oracle"', deploy_rig.SWAP)
         self.assertNotIn("rm ", deploy_rig.SWAP)
         self.assertEqual(lines[0], f"live oracle before: {OLD}")
-        self.assertEqual(lines[1], f"live oracle after: snaps/{NEW} (previous {OLD} kept)")
+        self.assertEqual(lines[-2], f"live oracle after: snaps/{NEW} (previous {OLD} kept)")
         self.assertEqual(lines[-1], f"readback boot-idle {HASH} {HASH}")
 
     def test_live_already_at_the_sha_builds_and_swaps_nothing_but_reads_back(self):
         rig = FakeRig(live=f"snaps/oracle-{SHA[:12]}-1793000000")
         lines = self.deploy(rig)
-        self.assertEqual(rig.kinds(), ["readlink", "readback"])
+        self.assertEqual(rig.kinds(), ["readlink", "suite", "readback"])
         self.assertIn("build and swap skipped", lines[1])
+        self.assertIn(f"suite {SUMMARY}", lines[2])
         self.assertEqual(lines[-1], f"readback boot-idle {HASH} {HASH}")
 
     def test_readback_mismatch_refuses(self):
@@ -184,6 +204,168 @@ class Deploy(unittest.TestCase):
         self.assertIn("for n in 1 2", body)
         self.assertIn("boot-idle", body)
         self.assertIn("cut -c1-16", body)
+
+
+class SuiteGate(unittest.TestCase):
+    """The full suite at exactly the landed SHA, between the build and the swap."""
+
+    def deploy(self, rig):
+        return deploy_rig.deploy(SHA, rig, FakeGit(), now=lambda: 1793400000.9)
+
+    def test_a_failing_suite_refuses_naming_the_first_failing_test_and_keeps_the_old_live_build(self):
+        rig = FakeRig(suite_code=1)
+        with self.assertRaises(deploy_rig.Refused) as caught:
+            self.deploy(rig)
+        message = str(caught.exception)
+        self.assertIn("suite failed at tests.test_x.Case.test_y: 1766 passed, 1 failed", message)
+        self.assertEqual(len(message.splitlines()), 1)
+        self.assertEqual(rig.kinds(), ["readlink", "build", "suite"])
+        self.assertEqual(rig.live, OLD)
+
+    def test_main_exits_1_with_one_stderr_line_and_no_swap_on_a_failing_suite(self):
+        rig, err = FakeRig(suite_code=1), StringIO()
+        old = deploy_rig.ssh, deploy_rig.git
+        deploy_rig.ssh, deploy_rig.git = rig, FakeGit()
+        try:
+            with redirect_stderr(err):
+                code = deploy_rig.main({deploy_rig.ENV: SHA})
+        finally:
+            deploy_rig.ssh, deploy_rig.git = old
+        self.assertEqual((code, len(err.getvalue().splitlines()), rig.live), (1, 1, OLD))
+        self.assertNotIn("swap", rig.kinds())
+
+    def test_a_failing_suite_also_refuses_when_the_live_oracle_already_reads_the_sha(self):
+        rig = FakeRig(live=f"snaps/oracle-{SHA[:12]}-1793000000", suite_code=1)
+        with self.assertRaisesRegex(deploy_rig.Refused, "suite failed at tests.test_x.Case.test_y"):
+            self.deploy(rig)
+        self.assertEqual(rig.kinds(), ["readlink", "suite"])
+
+    def test_an_import_outside_the_checkout_refuses_even_when_every_test_passed(self):
+        installed = "/home/abu/venv-decomp/lib/python3.13/site-packages/cake_taste/__init__.py"
+        rig = FakeRig(suite_out=suite_output(imported=installed))
+        with self.assertRaisesRegex(deploy_rig.Refused, f"cake_taste from {installed}, outside its checkout"):
+            self.deploy(rig)
+        self.assertNotIn("swap", rig.kinds())
+
+    def test_a_sibling_directory_sharing_the_checkout_prefix_is_outside(self):
+        rig = FakeRig(suite_out=suite_output(imported=f"{CHECKOUT}-old/src/cake_taste/__init__.py"))
+        with self.assertRaisesRegex(deploy_rig.Refused, "outside its checkout"):
+            self.deploy(rig)
+
+    def test_a_suite_at_another_sha_or_with_no_facts_refuses(self):
+        for out in (suite_output(sha="c" * 40), "fatal: unable to access gitea", ""):
+            rig = FakeRig(suite_code=0, suite_out=out)
+            with self.assertRaises(deploy_rig.Refused):
+                self.deploy(rig)
+            self.assertNotIn("swap", rig.kinds())
+
+    def test_a_suite_exiting_nonzero_without_a_named_failure_still_refuses(self):
+        rig = FakeRig(suite_code=1, suite_out=suite_output())
+        with self.assertRaisesRegex(deploy_rig.Refused, "suite failed at"):
+            self.deploy(rig)
+
+    def test_the_log_carries_the_summary_the_sha_and_the_imported_path(self):
+        lines = self.deploy(FakeRig())
+        self.assertIn(f"{SHA[:12]}: suite {SUMMARY}", lines)
+        self.assertIn(f"{SHA[:12]}: suite sha {SHA}", lines)
+        self.assertIn(f"{SHA[:12]}: suite imported {CHECKOUT}/src/cake_taste/__init__.py", lines)
+
+    def test_the_suite_runs_in_a_slot_at_the_exact_sha_into_the_new_snap_directory(self):
+        rig = FakeRig()
+        self.deploy(rig)
+        command = rig.commands[2]
+        self.assertTrue(command.startswith("~/finish/slot bash -c "))
+        tail = f" suite {SHA} {deploy_rig.GITEA} {deploy_rig.PYTHON} {deploy_rig.LIVE}/snaps/{NEW}"
+        self.assertTrue(command.endswith(tail))
+
+
+def git(*args, cwd):
+    identity = ["-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run(["git", *identity, *args], cwd=cwd, check=True, capture_output=True)
+
+
+class SuiteScript(unittest.TestCase):
+    """The remote SUITE script and RUNNER, run for real against a tiny local repository."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        base = Path(self.tmp.name)
+        self.repo, self.home, self.dest = base / "repo", base / "home", base / "dest"
+        for path in (self.repo / "src/cake_taste", self.repo / "tests", self.home / "finish", self.dest):
+            path.mkdir(parents=True)
+        (self.repo / "src/cake_taste/__init__.py").write_text("VALUE = 1\n")
+        self.write_test("self.assertEqual(cake_taste.VALUE, 1)")
+        git("init", "-q", "-b", "main", cwd=self.repo)
+        git("add", "-A", cwd=self.repo)
+        git("commit", "-q", "-m", "one", cwd=self.repo)
+
+    def write_test(self, body):
+        (self.repo / "tests/test_it.py").write_text(
+            "import unittest\nimport cake_taste\n\n\nclass Case(unittest.TestCase):\n"
+            f"    def test_it(self):\n        {body}\n"
+        )
+
+    def commit(self):
+        git("add", "-A", cwd=self.repo)
+        git("commit", "-q", "-m", "two", cwd=self.repo)
+        return self.sha()
+
+    def sha(self):
+        return subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=self.repo, capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+    def run_suite(self, sha, env=None):
+        command = deploy_rig.suite_command(sha, sys.executable, self.dest, str(self.repo))
+        command = command.removeprefix("~/finish/slot ")
+        done = subprocess.run(
+            ["bash", "-c", command],
+            env={"PATH": os.environ["PATH"], "HOME": str(self.home), **(env or {})},
+            capture_output=True, text=True, check=False,
+        )
+        return done, deploy_rig.suite_facts(done.stdout)
+
+    def test_a_passing_suite_reports_the_import_from_the_checkout_and_writes_suite_txt(self):
+        sha = self.sha()
+        done, facts = self.run_suite(sha, env={"PYTHONPATH": str(self.repo / "src")})
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(facts["suite-sha"], sha)
+        self.assertTrue(facts["suite-summary"].startswith("1 passed, 0 failed, 0 skipped in "))
+        self.assertTrue(PurePosixPath(facts["suite-import"]).is_relative_to(facts["suite-checkout"]))
+        self.assertNotIn(str(self.repo / "src"), facts["suite-import"])  # the checkout, not the source repo
+        text = (self.dest / "suite.txt").read_text()
+        self.assertIn(f"suite-sha: {sha}", text)
+        self.assertIn("suite-import: ", text)
+        self.assertEqual(list((self.home / "finish").glob("DEPLOY-SUITE.*")), [])  # the checkout is removed
+
+    def test_a_failing_test_exits_1_names_the_first_failure_and_writes_no_suite_txt(self):
+        self.write_test("self.assertEqual(cake_taste.VALUE, 2)")
+        done, facts = self.run_suite(self.commit())
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual(facts["suite-first-failure"], "test_it.Case.test_it")
+        self.assertTrue(facts["suite-summary"].startswith("0 passed, 1 failed, 0 skipped in "))
+        self.assertFalse((self.dest / "suite.txt").exists())
+
+    def test_the_suite_runs_exactly_the_landed_sha_not_the_branch_tip(self):
+        landed = self.sha()
+        self.write_test("self.fail('a later commit')")
+        self.commit()
+        done, facts = self.run_suite(landed)
+        self.assertEqual((done.returncode, facts["suite-sha"]), (0, landed))
+
+    def test_an_unknown_sha_fails_before_any_test_runs(self):
+        done, facts = self.run_suite("f" * 40)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertNotIn("suite-import", facts)
+
+    def test_an_installed_copy_ahead_on_the_path_is_never_imported(self):
+        installed = Path(self.tmp.name) / "site/cake_taste"
+        installed.mkdir(parents=True)
+        (installed / "__init__.py").write_text("VALUE = 99\n")
+        done, facts = self.run_suite(self.sha(), env={"PYTHONPATH": str(installed.parent)})
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertTrue(PurePosixPath(facts["suite-import"]).is_relative_to(facts["suite-checkout"]))
 
 
 if __name__ == "__main__":

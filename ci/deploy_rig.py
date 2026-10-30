@@ -6,8 +6,13 @@ LANDED_Projects_AbuN64_CakeTaste64. Any refusal or failed step prints one line o
   2. when ~/rig-state/tas/live/oracle already points at snaps/oracle-<sha12>-*, nothing is built or swapped;
   3. otherwise n64host is built at the SHA through ~/finish/slot into a new snaps/oracle-<sha12>-<epoch> directory
      (pinned deps copied from ~/src/oracle-deps and patched by hosts/n64recomp/deps.sh), never into an existing one;
-  4. the live link is swapped to the new directory by renaming a fresh link over it; previous directories stay;
-  5. readback, always: boot-idle runs twice through the live oracle and the two state hashes must be equal."""
+  4. the suite gate, always, between the build and the swap: the full test suite (unittest discover over tests/) runs
+     through ~/finish/slot on a clean checkout of exactly SHA with its src first on the import path. The imported
+     cake_taste path is printed and must lie inside the checkout. Any failure refuses (one line naming the first
+     failing test) with the live link untouched; the summary line, the SHA and the imported path go into the deploy
+     log and into snaps/<name>/suite.txt;
+  5. the live link is swapped to the new directory by renaming a fresh link over it; previous directories stay;
+  6. readback, always: boot-idle runs twice through the live oracle and the two state hashes must be equal."""
 
 import os
 import re
@@ -18,10 +23,13 @@ import sys
 import tempfile
 import time
 from collections.abc import Callable
+from pathlib import PurePosixPath
 
 ENV = "LANDED_Projects_AbuN64_CakeTaste64"
 RIG = "abu@192.168.0.101"
 GITEA = "http://10.10.10.130:18556/Projects/CakeTaste64.git"
+PACKAGE = "cake_taste"
+PYTHON = "/usr/bin/python3"
 LIVE = "~/rig-state/tas/live"
 SHA = re.compile(r"[0-9a-f]{40}")
 SNAP = re.compile(r"(?:.*/)?oracle-([0-9a-f]{12})-\d+")
@@ -98,6 +106,92 @@ done
 """
 
 
+# suite SHA URL PYTHON DEST: a clean checkout of exactly SHA, the suite run in it, one `suite-KEY: value` line per fact.
+SUITE = r"""set -u
+sha=$1 url=$2 py=$3 dest=$4
+work=$(mktemp -d "$HOME/finish/DEPLOY-SUITE.XXXXXX") || exit 9
+trap 'rm -rf "$work"' EXIT
+log=$HOME/finish/deploy-suite-${sha:0:12}.log
+git -c init.templateDir= init -q "$work/checkout" || exit 9
+cd "$work/checkout" || exit 9
+git fetch -q "$url" main || { echo "suite-error: cannot fetch main from $url" >&2; exit 9; }
+git checkout -q --detach "$sha" || { echo "suite-error: cannot check out $sha" >&2; exit 9; }
+echo "suite-checkout: $(pwd -P)"
+echo "suite-sha: $(git rev-parse HEAD)"
+cat > "$work/runner.py" <<'PY'
+__RUNNER__
+PY
+mkdir .tmp
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=init.templateDir GIT_CONFIG_VALUE_0=
+export TMPDIR=$PWD/.tmp ABU_SLOTS_DIR=$(mktemp -d "$work/slots.XXXXXX")
+export PYTHONPATH=$PWD/src PYTHONDONTWRITEBYTECODE=1
+rc=0
+"$py" "$work/runner.py" > "$log" 2>&1 || rc=$?
+grep '^suite-' "$log"
+echo "suite-log: $log"
+if [ "$rc" = 0 ]; then
+  { echo "suite-sha: $(git rev-parse HEAD)"; grep '^suite-\(summary\|import\)' "$log"; } > "$dest/suite.txt" || exit 9
+fi
+exit "$rc"
+"""
+
+# The runner: puts the checkout's src first, proves the package comes from there, runs unittest discover over tests/.
+RUNNER = r"""import os
+import sys
+import time
+import unittest
+
+root = os.path.realpath(os.getcwd())
+sys.path.insert(0, os.path.join(root, "src"))
+PACKAGE = "cake_taste"
+
+
+def imported():
+    return sorted({os.path.realpath(m.__file__) for n, m in sys.modules.items()
+                   if (n == PACKAGE or n.startswith(PACKAGE + ".")) and getattr(m, "__file__", None)})
+
+
+def inside(path):
+    return path.startswith(root + os.sep)
+
+
+__import__(PACKAGE)
+print("suite-import:", os.path.realpath(sys.modules[PACKAGE].__file__), flush=True)
+
+
+class Result(unittest.TextTestResult):
+    first = None
+
+    def addFailure(self, test, err):
+        self.first = self.first or test.id()
+        super().addFailure(test, err)
+
+    def addError(self, test, err):
+        self.first = self.first or test.id()
+        super().addError(test, err)
+
+    def addUnexpectedSuccess(self, test):
+        self.first = self.first or test.id()
+        super().addUnexpectedSuccess(test)
+
+
+start = time.monotonic()
+runner = unittest.TextTestRunner(stream=sys.stdout, resultclass=Result)
+result = runner.run(unittest.defaultTestLoader.discover("tests"))
+seconds = time.monotonic() - start
+outside = [path for path in imported() if not inside(path)]
+if outside:
+    print("suite-import:", outside[0], flush=True)
+    sys.exit(3)
+failed = len(result.failures) + len(result.errors) + len(result.unexpectedSuccesses)
+passed = result.testsRun - failed - len(result.skipped)
+print(f"suite-summary: {passed} passed, {failed} failed, {len(result.skipped)} skipped in {seconds:.0f} s")
+if failed or not passed:
+    print("suite-first-failure:", result.first or f"{passed} tests passed")
+    sys.exit(1)
+"""
+
+
 class Refused(Exception):
     """One line cause of a refusal or failed step."""
 
@@ -113,6 +207,11 @@ def ssh(command: str) -> tuple[int, str]:
 
 def git(*args: str) -> tuple[int, str]:
     return run(["git", *args])
+
+
+def suite_command(sha: str, python: str, dest: str, url: str = GITEA) -> str:
+    script = shlex.quote(SUITE.replace("__RUNNER__", RUNNER))
+    return f"~/finish/slot bash -c {script} suite {sha} {url} {python} {dest}"
 
 
 def landed_sha(environ: dict[str, str]) -> str:
@@ -173,6 +272,39 @@ def readback(ssh: Seam) -> str:
     return f"readback boot-idle {hashes[0]} {hashes[1]}"
 
 
+def suite_facts(out: str) -> dict[str, str]:
+    facts = {}
+    for line in out.splitlines():
+        key, sep, value = line.partition(": ")
+        if sep and key.startswith("suite-"):
+            facts[key] = value
+    return facts
+
+
+def suite(sha: str, dest: str, ssh: Seam) -> list[str]:
+    """The full suite at exactly sha on a clean rig checkout; returns the log lines, raises Refused on any failure."""
+    code, out = ssh(suite_command(sha, PYTHON, dest))
+    facts = suite_facts(out)
+    for key in ("suite-checkout", "suite-sha", "suite-import"):
+        if key not in facts:
+            raise Refused(f"suite gate did not start at {sha[:12]} (exit {code}): {last_line(out, 'no output')}")
+    if facts["suite-sha"] != sha:
+        raise Refused(f"suite ran at {facts['suite-sha']}, not the landed {sha}")
+    if not PurePosixPath(facts["suite-import"]).is_relative_to(facts["suite-checkout"]):
+        raise Refused(
+            f"suite imported {PACKAGE} from {facts['suite-import']}, outside its checkout {facts['suite-checkout']}"
+        )
+    if code or "suite-first-failure" in facts or "suite-summary" not in facts:
+        first = facts.get("suite-first-failure") or f"no summary, exit {code}: {last_line(out, 'no output')}"
+        summary, log = facts.get("suite-summary", "no summary"), facts.get("suite-log", "no log")
+        raise Refused(f"suite failed at {first}: {summary} ({log})")
+    return [
+        f"{sha[:12]}: suite {facts['suite-summary']}",
+        f"{sha[:12]}: suite sha {facts['suite-sha']}",
+        f"{sha[:12]}: suite imported {facts['suite-import']}",
+    ]
+
+
 def deploy(sha: str, ssh: Seam, git: Seam, now: Callable[[], float] = time.time) -> list[str]:
     """The whole mechanism; returns the log lines to print, the readback last. Raises Refused on the first failure."""
     check_on_main(sha, git)
@@ -181,9 +313,11 @@ def deploy(sha: str, ssh: Seam, git: Seam, now: Callable[[], float] = time.time)
     match = SNAP.fullmatch(before)
     if match and match.group(1) == sha[:12]:
         lines.append(f"{sha[:12]}: the live oracle already reads {before}, build and swap skipped")
+        lines += suite(sha, f"{LIVE}/{before}", ssh)
     else:
         name = f"oracle-{sha[:12]}-{int(now())}"
         build(sha, name, ssh)
+        lines += suite(sha, f"{LIVE}/snaps/{name}", ssh)
         swap(name, ssh)
         lines.append(f"live oracle after: snaps/{name} (previous {before} kept)")
     lines.append(readback(ssh))
