@@ -70,6 +70,13 @@ The CPU tick is the only source of guest time: a host-side call that blocks the 
 thread with no other guest thread runnable would stall the clock (the original idle thread
 spins in guest code, so this does not occur).
 
+The port's shim keeps the same clock with the same work measure: under `N64R_CLOCK=entries` one tick is one
+function entry of the original game at `HOST_GUEST_NS_PER_ENTRY` (the port reads that value as
+`N64C_GUEST_NS_PER_ENTRY`, which `tas play` takes from `gen/cpu_profile.h`), so oracle and port charge the
+same ns per entry and run VI, timers, SI and RSP completion from it. The loop-pass and interrupt-restore ticks
+are oracle-only; the port has no counterpart, and that difference is the measured residual in the port's
+SHIM-CLOCK result.
+
 Guest memory holds no heap address of the host process: `OSThread::context` is a real host pointer kept at offset
 0x20 of every thread record, so `patches/n64modernruntime-thread-context-slab.diff` constructs the contexts in a slab
 at the fixed address `0x200000000000`, one slot per `osCreateThread`, never reused. Two runs of the same movie
