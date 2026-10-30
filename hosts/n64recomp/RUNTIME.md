@@ -316,6 +316,13 @@ unset the host behaves as before. It knows nothing about any game.
   `N64R_TAS_TRACE` (file) writes "poll vi" per controller poll, the same line the port's `N64C_TAS_TRACE` writes.
   `N64R_TAS_EXIT_AFTER` (N) quits N polls after the movie ends. The movie replays
   without `N64R_GOLDEN_DIR` too (then only the pictures below are written).
+  `N64R_TAS_RENDER_LEAD` (K; unset or 0: every frame is drawn) draws only the graphics
+  frames submitted in the K polls before each picture point (every `N64R_TAS_SHOT_EVERY` polls, none when 0) and before the exit
+  (`render_gate.h`); the others are skipped whole (no display list, no present), because the guest reads RDRAM and
+  never the renderer. On the rig's software Vulkan a frame costs ~8 ms CPU, ~90% of an oracle run. A picture inside a
+  drawn window is the one a full run draws only while K frames cover what it depends on, so a run that scores
+  pictures leaves the variable unset. The graphics log line counts the skipped frames, and the exit line
+  `n64host: state trace polls=N symbols=S cpu_ms=T` gives the CPU the state hash and trace took.
 - `N64R_TAS_STATE`: a state spec (`tas_state.h`, the port's `N64C_TAS_STATE` twin). `N64R_TAS_STATE_HASH` (file)
   writes `<poll> <symbol>:<hash> ...` per controller poll; `N64R_TAS_STATE_AT` (P1,P2) with `N64R_TAS_STATE_DIR`
   (dir) writes `state-<poll>.bin` there. The words are read from the word-swizzled RDRAM (`TS_ORACLE`), so the two

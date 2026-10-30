@@ -22,6 +22,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <fstream>
 #include <mutex>
 #include <sstream>
@@ -31,6 +32,7 @@
 #include "ultramodern/renderer_context.hpp"
 #define TS_ORACLE 1
 #include "tas_state.h"
+#include "render_gate.h"
 
 extern uint8_t *n64host_rdram;
 void n64host_script_key(const char *name);
@@ -53,6 +55,8 @@ std::vector<Step> &steps = *new std::vector<Step>;
 size_t next_step = 0;
 FILE *movie;  // N64R_TAS_PLAY
 uint64_t polls, played, shot_every, exit_after = UINT64_MAX;
+RenderGate render_gate;  // N64R_TAS_RENDER_LEAD (render_gate.h); written before the guest runs, then only exit_poll (atomic)
+std::atomic<uint64_t> state_cpu_ns{0};
 bool movie_done;
 std::string &armed = *new std::string;   // checkpoint waiting for its first graphics task
 uint64_t acmd_seq = 0, acmd_bytes = 0, pcm_samples = 0, dl_seq = 0;
@@ -96,8 +100,15 @@ void state_init() {
     state_prev = static_cast<uint32_t *>(std::calloc(state.nsymbols ? state.nsymbols : 1, sizeof *state_prev));
 }
 
+uint64_t thread_cpu_ns() {
+    timespec t;
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
+    return uint64_t(t.tv_sec) * 1000000000ull + uint64_t(t.tv_nsec);
+}
+
 void state_poll(uint64_t poll) {
     if (!state.nruns || !n64host_rdram) return;
+    const uint64_t began = thread_cpu_ns();
     if (state_hash) {
         ts_hash(&state, n64host_rdram, state_now);
         ts_trace_line(state_hash, long(poll), &state, state_now, state_prev, &state_started);
@@ -110,6 +121,7 @@ void state_poll(uint64_t poll) {
             std::_Exit(2);
         }
     }
+    state_cpu_ns += thread_cpu_ns() - began;
 }
 
 bool on() { return events != nullptr; }
@@ -151,6 +163,9 @@ void checkpoint(const std::string &name) {
 
 void quit(uint64_t now) {
     n64host_view_final();
+    if (state.nruns)
+        std::fprintf(stderr, "n64host: state trace polls=%llu symbols=%zu cpu_ms=%llu\n", (unsigned long long)polls,
+                     state.nsymbols, (unsigned long long)(state_cpu_ns.load() / 1000000));
     if (events) {
         std::fprintf(events, "{\"ev\":\"quit\",\"vi\":%llu}\n", (unsigned long long)now);
         std::fflush(events);
@@ -171,6 +186,8 @@ extern "C" void n64host_golden_init() {
         if (!movie) { std::fprintf(stderr, "n64host: cannot read movie %s\n", m); std::_Exit(5); }
         if (const char *e = std::getenv("N64R_TAS_SHOT_EVERY")) shot_every = std::strtoull(e, nullptr, 10);
         if (const char *e = std::getenv("N64R_TAS_EXIT_AFTER")) exit_after = std::strtoull(e, nullptr, 10);
+        if (const char *e = std::getenv("N64R_TAS_RENDER_LEAD")) render_gate.lead = std::strtoull(e, nullptr, 10);
+        render_gate.every = shot_every;
         state_init();
     }
     const char *d = std::getenv("N64R_GOLDEN_DIR");
@@ -211,6 +228,9 @@ extern "C" void n64host_golden_vi() {
     }
 }
 
+// Whether the graphics frame the guest is submitting now is drawn (render_gate.h).
+extern "C" bool n64host_render_wanted() { return render_gate.wanted(n64host_tas_poll); }
+
 extern "C" uint64_t n64host_golden_frame() { return vi_count.load(); }
 
 // N64R_PADS: controllers the guest sees (1..4, default 1); a movie line holds that many "BUTTONS X Y" triples.
@@ -242,6 +262,7 @@ extern "C" bool n64host_golden_pad(unsigned channel, uint16_t *buttons, int8_t *
     while (!movie_done) {
         if (!std::fgets(line, sizeof line, movie)) {
             movie_done = true;
+            if (exit_after != UINT64_MAX) render_gate.exit_poll = played + exit_after;
             if (events) std::fprintf(events, "{\"ev\":\"movie_end\",\"poll\":%llu}\n", (unsigned long long)played);
             break;
         }

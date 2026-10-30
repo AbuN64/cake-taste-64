@@ -17,6 +17,7 @@
 #include "ultramodern/ultramodern.hpp"
 
 extern "C" int n64host_frame_read(uint32_t phys, uint32_t *rgba, uint32_t w, uint32_t h);
+extern "C" bool n64host_render_wanted();
 void n64host_cpu_idle_return();
 
 namespace {
@@ -87,6 +88,7 @@ bool write_view(const std::vector<uint32_t> &pixels) {
 void update_view(bool force) {
     open_view();
     if (view.path.empty() || view.failed) return;
+    if (!force && !n64host_render_wanted()) return;  // between drawn frames the screen holds the last picture
     const auto now = std::chrono::steady_clock::now();
     if (!force && view.written &&
         std::chrono::duration_cast<std::chrono::nanoseconds>(now - view.last).count() < view.interval_ns) return;
