@@ -94,6 +94,16 @@ bank select, 8 blocks and a bank select. On a formatted one-bank card `osPfsInit
 select, id, label, `osPfsChecker` 81), `osPfsFileState` of an empty note 2 and `osPfsFreeBlocks` 17, the counts the
 oracle's SI log shows; the oracle runs libultra's pfs itself.
 
+**Native stand-ins pay the original's cost.** Where the port runs native code in place of original game code, the
+port charges the entries that original code makes on the oracle, in the original's shape; the oracle never stops
+charging to match the port. Its task scheduler (`shim/n64c_scsched.c`) stands in for the sample scheduler the ROM
+links as game code: the binding makes the handlers themselves native on both sides (`Sched_HandleRetrace`,
+`Sched_HandleRspCompletion`, ...), and the port charges their callees: one `__scSchedule` pass over the task lists
+per scheduling step plus one more after a pass that took a unit (its recursion), one `__scExec` per task started and
+one `__scTaskComplete` per unit reporting done. An idle retrace is one entry; a retrace that starts a graphics task is
+three, the counts the oracle's scheduler thread shows (`Sched_SelectRunnableTasks`, `Sched_StartSelectedTasks`,
+`Sched_CompleteTaskAndSwapBuffer`).
+
 Guest memory holds no heap address of the host process: `OSThread::context` is a real host pointer kept at offset
 0x20 of every thread record, so `patches/n64modernruntime-thread-context-slab.diff` constructs the contexts in a slab
 at the fixed address `0x200000000000`, one slot per `osCreateThread`, never reused. Two runs of the same movie
