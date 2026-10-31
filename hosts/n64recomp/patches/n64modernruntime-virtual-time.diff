@@ -1,5 +1,5 @@
 diff --git a/ultramodern/include/ultramodern/ultramodern.hpp b/ultramodern/include/ultramodern/ultramodern.hpp
-index 46aea61..fdfcf9e 100644
+index 46aea61..f471e46 100644
 --- a/ultramodern/include/ultramodern/ultramodern.hpp
 +++ b/ultramodern/include/ultramodern/ultramodern.hpp
 @@ -6,6 +6,7 @@
@@ -10,7 +10,7 @@ index 46aea61..fdfcf9e 100644
  #include <filesystem>
  
  #undef MOODYCAMEL_DELETE_FUNCTION
-@@ -107,6 +108,20 @@ uint32_t get_speed_multiplier();
+@@ -107,6 +108,22 @@ uint32_t get_speed_multiplier();
  std::chrono::high_resolution_clock::time_point get_start();
  std::chrono::high_resolution_clock::duration time_since_start();
  void measure_input_latency();
@@ -28,11 +28,13 @@ index 46aea61..fdfcf9e 100644
 +bool vclock_idle(uint64_t max_wait_ns);
 +// Called on the idle thread after vclock_idle, so the host can exclude the event work it just did.
 +void set_vclock_idle_hook(std::function<void()> hook);
++// The AI buffer at the head of the FIFO has played: send the OS_EVENT_AI message. The host calls it at the buffer's end.
++void ai_buffer_done();
  void sleep_milliseconds(uint32_t millis);
  void sleep_until(const std::chrono::high_resolution_clock::time_point& time_point);
  
 diff --git a/ultramodern/src/events.cpp b/ultramodern/src/events.cpp
-index 17d7a47..e28d5e9 100644
+index 17d7a47..b427f8b 100644
 --- a/ultramodern/src/events.cpp
 +++ b/ultramodern/src/events.cpp
 @@ -8,6 +8,9 @@
@@ -89,7 +91,7 @@ index 17d7a47..e28d5e9 100644
      moodycamel::ConcurrentQueue<OSThread*> deleted_threads{};
  } events_context{};
  
-@@ -184,80 +206,65 @@ extern moodycamel::LightweightSemaphore graphics_shutdown_ready;
+@@ -184,88 +206,77 @@ extern moodycamel::LightweightSemaphore graphics_shutdown_ready;
  
  void set_dummy_vi(bool odd);
  
@@ -167,7 +169,7 @@ index 17d7a47..e28d5e9 100644
  
 -        // Update VI registers and swap VI modes.
 -        events_context.vi.update_vi();
-+    // If the game has started, handle sending VI and AI events.
++    // If the game has started, handle sending VI events.
 +    if (ultramodern::is_game_started()) {
 +        remaining_retraces--;
  
@@ -198,28 +200,40 @@ index 17d7a47..e28d5e9 100644
              }
 +            remaining_retraces = cur_state->retrace_count;
          }
--
++    }
+ 
 -        if (events_callbacks.vi_callback != nullptr) {
 -            events_callbacks.vi_callback();
-+        if (events_context.ai.mq != NULLPTR) {
-+            // Send a message to the VI queue, and do not set it to be requeued if the queue was full for the same reason as the VI message above.
-+            ultramodern::enqueue_external_message_src(events_context.ai.mq, events_context.ai.msg, false, ultramodern::EventMessageSource::Ai);
-         }
-     }
-+
+-        }
 +    if (events_callbacks.vi_callback != nullptr) {
 +        events_callbacks.vi_callback();
-+    }
-+}
-+
+     }
+ }
+ 
 +void TaskDone::wait() {
 +    using namespace std::chrono_literals;
 +    std::unique_lock lock{mutex};
 +    while (!done && !exited) wake.wait_for(lock, 50ms);
++}
++
+ void sp_complete() {
+     uint8_t* rdram = events_context.rdram;
+     std::lock_guard lock{ events_context.message_mutex };
+     ultramodern::enqueue_external_message_src(events_context.sp.mq, events_context.sp.msg, false, ultramodern::EventMessageSource::Sp);
  }
  
- void sp_complete() {
-@@ -287,14 +294,20 @@ void task_thread_func(uint8_t* rdram, moodycamel::LightweightSemaphore* thread_r
++// An AI buffer has played: the host raises the AI interrupt at its end on the virtual clock.
++void ultramodern::ai_buffer_done() {
++    uint8_t* rdram = events_context.rdram;
++    std::lock_guard lock{ events_context.message_mutex };
++    if (events_context.ai.mq != NULLPTR) {
++        ultramodern::enqueue_external_message_src(events_context.ai.mq, events_context.ai.msg, false, ultramodern::EventMessageSource::Ai);
++    }
++}
+ void dp_complete() {
+     uint8_t* rdram = events_context.rdram;
+     std::lock_guard lock{ events_context.message_mutex };
+@@ -287,14 +298,20 @@ void task_thread_func(uint8_t* rdram, moodycamel::LightweightSemaphore* thread_r
          if (task == nullptr) {
              return;
          }
@@ -242,7 +256,7 @@ index 17d7a47..e28d5e9 100644
      }
  }
  
-@@ -364,11 +377,7 @@ void gfx_thread_func(uint8_t* rdram, moodycamel::LightweightSemaphore* thread_re
+@@ -364,11 +381,7 @@ void gfx_thread_func(uint8_t* rdram, moodycamel::LightweightSemaphore* thread_re
          if (events_context.action_queue.wait_dequeue_timed(action, 1ms)) {
              // Determine the action type and act on it
              if (const auto* task_action = std::get_if<SpTaskAction>(&action)) {
@@ -255,7 +269,7 @@ index 17d7a47..e28d5e9 100644
                  ultramodern::measure_input_latency();
  
                  PTR(u64) displaylist = task_action->task.t.data_ptr;
-@@ -376,9 +385,9 @@ void gfx_thread_func(uint8_t* rdram, moodycamel::LightweightSemaphore* thread_re
+@@ -376,9 +389,9 @@ void gfx_thread_func(uint8_t* rdram, moodycamel::LightweightSemaphore* thread_re
  
                  [[maybe_unused]] auto renderer_start = std::chrono::high_resolution_clock::now();
                  renderer_context->send_dl(&task_action->task);
@@ -266,7 +280,7 @@ index 17d7a47..e28d5e9 100644
                  // TODO hook the parsed event up to the actual parsing point when a callback is added to RT64.
                  ultramodern::extensions::on_displaylist_parsed(displaylist);
                  ultramodern::extensions::on_displaylist_completed(displaylist);
-@@ -566,11 +575,22 @@ void ultramodern::submit_rsp_task(RDRAM_ARG PTR(OSTask) task_) {
+@@ -566,11 +579,22 @@ void ultramodern::submit_rsp_task(RDRAM_ARG PTR(OSTask) task_) {
      OSTask* task = TO_PTR(OSTask, task_);
  
      // Send gfx tasks to the graphics action queue
@@ -291,7 +305,7 @@ index 17d7a47..e28d5e9 100644
          events_context.sp_task_queue.enqueue(task);
      }
  }
-@@ -619,12 +639,12 @@ void ultramodern::init_events(RDRAM_ARG ultramodern::renderer::WindowHandle wind
+@@ -619,12 +643,12 @@ void ultramodern::init_events(RDRAM_ARG ultramodern::renderer::WindowHandle wind
          throw std::runtime_error("Failed to initialize the renderer");
      }
  

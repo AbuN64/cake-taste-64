@@ -1,6 +1,5 @@
 #include <SDL.h>
 #include <cstdio>
-#include <algorithm>
 #include <cstdlib>
 #include <deque>
 #include <mutex>
@@ -15,9 +14,15 @@ uint32_t rate = 32000;
 uint64_t samples = 0, nonzero = 0;
 std::mutex audio_mutex;
 // The AI plays queued samples in guest time, as VI and timers run, so the
-// FIFO the game sees never depends on how fast the host consumes sound. Guest nanoseconds each buffer ends at.
+// FIFO the game sees never depends on how fast the host consumes sound.
+// The AI FIFO in CPU Count ticks (46.875 MHz, the port's unit): each held buffer's end, oldest first. A buffer starts
+// at the end of the one ahead of it, or now, and plays ceil(frames * Count rate / sample rate) ticks; the AI interrupt
+// is raised at its end (RUNTIME.md "Virtual guest time").
+constexpr uint64_t counter_hz = 46875000;
 std::deque<uint64_t> guest_ends;
-uint64_t guest_end = 0;
+uint64_t ticks_now() { return ultramodern::vclock_now_ns() * 3 / 64; }
+uint64_t tick_ns(uint64_t ticks) { return (ticks * 64 + 2) / 3; } // the first ns at which ticks_now() reaches ticks
+void drain(uint64_t now) { while (!guest_ends.empty() && guest_ends.front() <= now) guest_ends.pop_front(); }
 // N64R_AUDIO_OUT=<path>: every queued block appended as raw s16 stereo (the port's N64C_AUDIO_OUT layout); <path>.rate
 // holds "<rate>\n", replaced whole when the game sets the frequency. No wall-time cap: the oracle runs in guest time,
 // so the file holds all the sound of the run at whatever speed it replays.
@@ -68,8 +73,11 @@ void queue(int16_t *s, size_t n) {
     if (!dev) open_dev();
     if (n > UINT32_MAX / sizeof(int16_t) || SDL_QueueAudio(dev, s, Uint32(n * sizeof(int16_t))) != 0)
         fail("queue");
-    guest_end = std::max(guest_end, ultramodern::vclock_now_ns()) + uint64_t(n / 2) * 1000000000ull / rate;
-    guest_ends.push_back(guest_end);
+    const uint64_t now = ticks_now();
+    drain(now);
+    const uint64_t end = (guest_ends.empty() ? now : guest_ends.back()) + (uint64_t(n / 2) * counter_hz + rate - 1) / rate;
+    guest_ends.push_back(end);
+    ultramodern::vclock_schedule(tick_ns(end), ultramodern::ai_buffer_done);
     const auto previous = samples;
     samples += n;
     for (size_t i=0; i<n; ++i) nonzero += s[i] != 0;
@@ -79,13 +87,13 @@ void queue(int16_t *s, size_t n) {
 }
 size_t remaining() {
     std::lock_guard lock(audio_mutex);
-    const uint64_t now = ultramodern::vclock_now_ns();
-    return guest_end > now ? size_t((guest_end - now) * rate / 1000000000ull) : 0;
+    const uint64_t now = ticks_now();
+    drain(now);
+    return guest_ends.empty() ? 0 : size_t((guest_ends.back() - now) * rate / counter_hz);
 }
 uint32_t status() {
     std::lock_guard lock(audio_mutex);
-    const uint64_t now = ultramodern::vclock_now_ns();
-    while (!guest_ends.empty() && guest_ends.front() <= now) guest_ends.pop_front();
+    drain(ticks_now());
     return (guest_ends.empty() ? 0 : 0x40000000u) | (guest_ends.size() >= 2 ? 0x80000000u : 0);
 }
 void set_freq(uint32_t f) { n64host_golden_rate(f); tap_rate(f); std::lock_guard lock(audio_mutex); rate = f; open_dev(); }

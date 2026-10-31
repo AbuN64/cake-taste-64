@@ -15,7 +15,7 @@ are profile data. Controller 1 includes keyboard input; the Controller Pak is ab
 
 Audio opens SDL's default stereo S16 output; no dummy driver is selected by the
 host. The pinned runtime's always-idle AI status is wrapped with a two-buffer
-FIFO based on SDL consumption. A full FIFO rejects a third DMA with -1. Raw SI
+FIFO on the virtual clock (see Virtual guest time). A full FIFO rejects a third DMA with -1. Raw SI
 returns controller/Pak status and delivers SI completion for both DMA directions.
 `osMapTLB` accepts only mappings equivalent to the declared profile map; this is
 not a dynamic TLB implementation.
@@ -78,6 +78,11 @@ hardware-like constants in `events.cpp`), and only once the host has finished th
 the host renderer is slower, the guest thread waits in wall time at that event while guest
 time stands still. So a slow renderer or a loaded host changes how long a run takes, never the
 guest-visible order or spacing of events. VI is 60 Hz of guest time from retrace 1 at time 0.
+An AI buffer is an event on the same clock, the same rule on both sides from the same inputs: it starts at the end of
+the buffer ahead of it in the two-entry FIFO, or at submission when the FIFO is empty, and plays
+ceil(frames * 46875000 / rate) Count ticks at the rate `osAiSetFrequency` set; the AI interrupt (`OS_EVENT_AI`) is
+raised once at its end and at no other time (oracle `audio_sdl.cpp` and `ultramodern::ai_buffer_done`, port
+`shim/n64c_audio.c`). `osAiGetStatus` reads the FIFO entries whose end is still ahead.
 The CPU tick is the only source of guest time: a host-side call that blocks the running guest
 thread with no other guest thread runnable would stall the clock (the original idle thread
 spins in guest code, so this does not occur).
