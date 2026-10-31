@@ -83,15 +83,20 @@ SELFCHECK = r"""selfcheck() {
 """
 
 # build: the Activation job, run in the Worktree at the SHA with BUILD=<Toolkit>.<sha> and JOBS set. The build tree and
-# copied deps live only while it builds; exit 0 (built and self-checked) is the gate for the flip.
+# copied deps live only while it builds; exit 0 (built and self-checked) is the gate for the flip, and any other exit
+# removes $BUILD so the next activation of the sha starts clean. The copied deps are reset to their pins first: the
+# shared copy may carry an older patch set, and deps.sh applies this SHA's patches onto the pristine pin.
 BUILD = (
     SELFCHECK
     + r"""set -eu
 sha=$(git rev-parse HEAD)
 src=$PWD
 mkdir "$BUILD"
+trap 'rc=$?; test "$rc" = 0 || rm -rf "$BUILD"' EXIT
 mkdir "$BUILD/deps"
 cp -a "$HOME/src/oracle-deps/N64ModernRuntime" "$HOME/src/oracle-deps/rt64" "$BUILD/deps/"
+git -C "$BUILD/deps/N64ModernRuntime" reset -q --hard
+git -C "$BUILD/deps/rt64" reset -q --hard
 sh hosts/n64recomp/deps.sh "$BUILD/deps"
 cmake -S hosts/n64recomp -B "$BUILD/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_C_COMPILER=/usr/bin/gcc-14 -DCMAKE_CXX_COMPILER=/usr/bin/g++-14 \

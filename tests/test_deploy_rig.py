@@ -104,6 +104,12 @@ class Shape(unittest.TestCase):
         for retired in ("finish/", "flock", "waitfor", "ssh", "-j8"):
             self.assertNotIn(retired, source.replace("no ssh, slot or lock", ""))
 
+    def test_the_build_resets_the_copied_deps_and_removes_a_failed_build_folder(self):
+        for needle in ("reset -q --hard", 'trap \'rc=$?; test "$rc" = 0 || rm -rf "$BUILD"\' EXIT'):
+            self.assertIn(needle, deploy_rig.BUILD)
+        self.assertLess(deploy_rig.BUILD.index("cp -a"), deploy_rig.BUILD.index("reset -q --hard"))
+        self.assertLess(deploy_rig.BUILD.index("reset -q --hard"), deploy_rig.BUILD.index("deps.sh"))
+
     def test_the_build_uses_the_job_width_and_the_activation_folder(self):
         self.assertIn('cmake --build "$BUILD/build" -j"$JOBS"', deploy_rig.BUILD)
         self.assertIn('mkdir "$BUILD"', deploy_rig.BUILD)
