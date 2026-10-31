@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Deploys the landed CakeTaste64 commit to the rig oracle through Job Invoke: `.deploy` runs this after Land, with the
-landed SHA in LANDED_Projects_AbuN64_CakeTaste64, the run's board in BUTLERMASTER_RUN_BOARD and its card in
-BUTLERMASTER_RUN_CARD. Any refusal or failed step prints one line on stderr and exits 1. Every rig step is one
+landed SHA in LANDED_Projects_AbuN64_CakeTaste64 and the landing card as the arguments `--Subject.Board <board>
+--Subject.Card <card>`, which go straight to Job Invoke so the deploy's jobs run as the landing card's jobs. Any refusal or failed step prints one line on stderr and exits 1. Every rig step is one
 `mo-butlermaster Job Invoke --Host rig --Worktree <repo>@<sha>` job at the exact SHA (run in its Worktree with JOBS set
 to Dos's width), so Dos admits the work and the per-host activation permit serializes deploys: no ssh, slot or lock.
 
@@ -20,6 +20,7 @@ to Dos's width), so Dos admits the work and the per-host activation permit seria
   5. readback, always: the last job runs the self-check again through the live link, and the link must read
      <Toolkit>.<sha>."""
 
+import argparse
 import json
 import os
 import re
@@ -30,8 +31,6 @@ from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
 ENV = "LANDED_Projects_AbuN64_CakeTaste64"
-BOARD_ENV = "BUTLERMASTER_RUN_BOARD"
-CARD_ENV = "BUTLERMASTER_RUN_CARD"
 HOST = "rig"
 REPO = "Projects/AbuN64/CakeTaste64"
 GITEA = "http://10.10.10.130:18556/Projects/CakeTaste64.git"
@@ -357,15 +356,25 @@ def deploy(sha: str, jobs_at: JobsAt, git: Seam) -> list[str]:
     return lines
 
 
-def main(environ: dict[str, str] | None = None, jobs_at: JobsAt | None = None, git: Seam = git) -> int:
+def parse(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog="deploy_rig.py", description="Deploys the landed commit to the rig oracle.")
+    parser.add_argument("--Subject.Board", dest="board", required=True, help="the landing card's board")
+    parser.add_argument("--Subject.Card", dest="card", required=True, help="the landing card")
+    return parser.parse_args(argv)
+
+
+def main(
+    argv: list[str] | None = None,
+    environ: dict[str, str] | None = None,
+    jobs_at: JobsAt | None = None,
+    git: Seam = git,
+) -> int:
     environ = dict(os.environ) if environ is None else environ
+    args = parse(sys.argv[1:] if argv is None else argv)
     try:
         sha = landed_sha(environ)
         if jobs_at is None:
-            board, card = environ.get(BOARD_ENV, ""), environ.get(CARD_ENV, "")
-            if not board or not card:
-                raise Refused(f"{BOARD_ENV} and {CARD_ENV} must name the card whose jobs the deploy runs as")
-            jobs_at = lambda at: butler_job(board, card, at)  # noqa: E731
+            jobs_at = lambda at: butler_job(args.board, args.card, at)  # noqa: E731
         for line in deploy(sha, jobs_at, git):
             print(line, flush=True)
     except Refused as refusal:

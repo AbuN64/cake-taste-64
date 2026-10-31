@@ -12,6 +12,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path, PurePosixPath
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "ci/deploy_rig.py"
@@ -118,10 +119,10 @@ class Shape(unittest.TestCase):
 
 
 class Refusals(unittest.TestCase):
-    def run_main(self, environ, jobs, git=None):
+    def run_main(self, environ, jobs, git=None, argv=("--Subject.Board", "b", "--Subject.Card", "c")):
         out, err = StringIO(), StringIO()
         with redirect_stdout(out), redirect_stderr(err):
-            code = deploy_rig.main(environ, jobs, git or FakeGit())
+            code = deploy_rig.main(list(argv), environ, jobs, git or FakeGit())
         return code, out.getvalue(), err.getvalue()
 
     def test_unset_or_malformed_sha_refuses_before_any_seam(self):
@@ -132,10 +133,21 @@ class Refusals(unittest.TestCase):
             self.assertEqual((code, err.count("\n"), jobs.calls, git.calls), (1, 1, [], []))
             self.assertIn("is not a 40-hex SHA", err)
 
-    def test_a_card_without_board_and_card_names_refuses_before_any_job(self):
-        code, _, err = self.run_main({deploy_rig.ENV: SHA}, None)
-        self.assertEqual(code, 1)
-        self.assertIn(deploy_rig.CARD_ENV, err)
+    def test_missing_board_or_card_argument_exits_2_before_any_seam(self):
+        for argv in ([], ["--Subject.Board", "b"], ["--Subject.Card", "c"]):
+            jobs, git = FakeJobs(), FakeGit()
+            with self.assertRaises(SystemExit) as stop, redirect_stderr(StringIO()) as err:
+                deploy_rig.main(argv, {deploy_rig.ENV: SHA}, jobs, git)
+            self.assertEqual((stop.exception.code, jobs.calls, git.calls), (2, [], []))
+            self.assertIn("--Subject.", err.getvalue())
+
+    def test_the_arguments_reach_job_invoke_and_no_run_env_is_read(self):
+        environ = {deploy_rig.ENV: SHA, "BUTLERMASTER_RUN_BOARD": "other", "BUTLERMASTER_RUN_CARD": "other"}
+        with patch.object(deploy_rig, "butler_job", return_value=FakeJobs()(SHA)) as bound, redirect_stdout(StringIO()):
+            code = deploy_rig.main(["--Subject.Board", "7-board", "--Subject.Card", "card-1"], environ, None, FakeGit())
+        self.assertEqual(code, 0)
+        bound.assert_called_once_with("7-board", "card-1", SHA)
+        self.assertNotIn("BUTLERMASTER_RUN", SCRIPT.read_text())
 
     def test_sha_not_on_gitea_main_refuses_without_a_job(self):
         jobs = FakeJobs()
