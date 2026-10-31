@@ -106,11 +106,17 @@ cmake -S hosts/n64recomp -B "$BUILD/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DFETCHCONTENT_FULLY_DISCONNECTED=ON
 cmake --build "$BUILD/build" -j"$JOBS"
 install -m 755 "$BUILD/build/n64host" "$BUILD/n64host"
-python3 - "$sha" "__TOOLKIT__/oracle-pins.json" > "$BUILD/oracle-pins.json" <<'PY'
-import json, sys, time
+mkdir "$BUILD/gen"
+install -m 644 "$BUILD/build/gen/cpu_profile.h" "$BUILD/build/gen/cpu_native.h" "$BUILD/gen/"
+python3 - "$sha" "__TOOLKIT__/oracle-pins.json" "$BUILD/gen" \
+  "$HOME/rig-state/behave/oracle-facts.json" > "$BUILD/oracle-pins.json" <<'PY'
+import hashlib, json, pathlib, sys, time
 old = json.load(open(sys.argv[2]))
+gen = {n: hashlib.sha256((pathlib.Path(sys.argv[3]) / n).read_bytes()).hexdigest()
+       for n in ("cpu_profile.h", "cpu_native.h")}
 print(json.dumps({"cake_taste": sys.argv[1], "built_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                  "wall": old["wall"], "cpu": old["cpu"]}, indent=1))
+                  "wall": old["wall"], "cpu": old["cpu"], "gen": gen,
+                  "facts": hashlib.sha256(pathlib.Path(sys.argv[4]).read_bytes()).hexdigest()}, indent=1))
 PY
 rm -rf "$BUILD/deps" "$BUILD/build"
 selfcheck "$BUILD/n64host"

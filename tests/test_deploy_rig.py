@@ -1,6 +1,7 @@
 """The rig deploy through Job Invoke: refusals before any job, the suite gate, the Activation build, the no-op path and
 the live-link readback, all through fake job and git seams; the suite script and runner run for real in a tiny repo."""
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -116,6 +117,31 @@ class Shape(unittest.TestCase):
         self.assertIn('mkdir "$BUILD"', deploy_rig.BUILD)
         self.assertTrue(deploy_rig.BUILD.rstrip().endswith('selfcheck "$BUILD/n64host"'))
         self.assertIn(f'selfcheck "{TOOLKIT}/n64host"', deploy_rig.READBACK)
+
+    def test_the_charge_headers_ship_in_the_snapshot_and_are_hashed_in_its_pins(self):
+        build = deploy_rig.BUILD
+        copy = 'install -m 644 "$BUILD/build/gen/cpu_profile.h" "$BUILD/build/gen/cpu_native.h" "$BUILD/gen/"'
+        self.assertIn(copy, build)
+        self.assertLess(build.index(copy), build.index('rm -rf "$BUILD/deps" "$BUILD/build"'))
+        self.assertLess(build.index(copy), build.index("oracle-pins.json"))
+        self.assertIn('"gen": gen', build)
+
+    def test_the_pins_script_hashes_both_headers_for_real(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / "gen").mkdir()
+            (tmp / "gen/cpu_profile.h").write_bytes(b"profile")
+            (tmp / "gen/cpu_native.h").write_bytes(b"native")
+            (tmp / "facts.json").write_bytes(b"facts")
+            (tmp / "old.json").write_text('{"wall": 2, "cpu": 2}')
+            script = deploy_rig.BUILD.split("<<'PY'\n")[1].split("\nPY\n")[0]
+            argv = ["python3", "-", "sha", *(str(tmp / n) for n in ("old.json", "gen", "facts.json"))]
+            out = subprocess.run(argv, input=script, capture_output=True, text=True, check=True).stdout
+            pins = json.loads(out)
+            gen = pins["gen"]
+            self.assertEqual(pins["facts"], hashlib.sha256(b"facts").hexdigest())
+            self.assertEqual(gen["cpu_profile.h"], hashlib.sha256(b"profile").hexdigest())
+            self.assertEqual(gen["cpu_native.h"], hashlib.sha256(b"native").hexdigest())
 
 
 class Refusals(unittest.TestCase):
